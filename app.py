@@ -156,6 +156,12 @@ with pestana_asesores:
     ]
 
     borraria_todo = bool(actual) and not limpias
+
+    if not borraria_todo:
+        # Ninguna confirmación vieja debe sobrevivir al episodio de borrado
+        # que la motivó: si ya no hay nada que borrar, se apaga.
+        st.session_state["confirmar_borrado_asesores"] = False
+
     confirmado = True
     if borraria_todo:
         st.warning(
@@ -180,4 +186,5 @@ with pestana_asesores:
             st.error(f"El área debe ser {' o '.join(AREAS_VALIDAS)}.")
         else:
             guardar_asesores(ruta_asesores(CFG), dict(limpias))
+            st.session_state["confirmar_borrado_asesores"] = False
             st.success(f"Se guardaron {len(limpias)} asesores.")
