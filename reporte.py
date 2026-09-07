@@ -1,8 +1,9 @@
 """Armado del reporte de conversaciones a partir de los datos de Chatwoot."""
 
 import csv
+import io
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -104,3 +105,96 @@ def resolver_area(email: str | None, mapeo: dict[str, str]) -> str:
     if not email or not email.strip():
         return SIN_ASIGNAR
     return mapeo.get(email.strip().lower(), SIN_MAPEAR)
+
+
+COLUMNAS = (
+    "conversacion_id",
+    "asesor",
+    "email_asesor",
+    "area",
+    "fecha_creacion",
+    "etiquetas",
+    "direccion",
+    "estado",
+    "fecha_cierre",
+    "tiempo_resolucion_horas",
+    "cierre_aproximado",
+)
+
+FORMATO_FECHA = "%Y-%m-%d %H:%M"
+
+
+def _texto_fecha(momento: datetime | None) -> str:
+    return momento.strftime(FORMATO_FECHA) if momento else ""
+
+
+def construir_fila(
+    conversacion: dict, mensajes: list[dict], mapeo: dict[str, str]
+) -> dict[str, str]:
+    asignado = (conversacion.get("meta") or {}).get("assignee") or {}
+    email = asignado.get("email") or ""
+    creacion = a_fecha_local(conversacion.get("created_at"))
+    cierre, aproximado = detectar_cierre(conversacion, mensajes)
+
+    if cierre and creacion:
+        horas = f"{(cierre - creacion).total_seconds() / 3600:.1f}"
+    else:
+        horas = ""
+
+    return {
+        "conversacion_id": str(conversacion.get("id", "")),
+        "asesor": asignado.get("name") or "",
+        "email_asesor": email,
+        "area": resolver_area(email, mapeo),
+        "fecha_creacion": _texto_fecha(creacion),
+        "etiquetas": ";".join(conversacion.get("labels") or []),
+        "direccion": detectar_direccion(mensajes),
+        "estado": traducir_estado(conversacion.get("status", "")),
+        "fecha_cierre": _texto_fecha(cierre),
+        "tiempo_resolucion_horas": horas,
+        "cierre_aproximado": "Sí" if cierre and aproximado else "",
+    }
+
+
+def generar_filas(
+    cliente,
+    desde: datetime,
+    hasta: datetime,
+    mapeo: dict[str, str],
+    cache=None,
+    al_avanzar=None,
+) -> list[dict[str, str]]:
+    """Trae las conversaciones del rango y arma una fila por cada una."""
+    conversaciones = cliente.listar_conversaciones(desde, hasta)
+    total = len(conversaciones)
+    filas = []
+
+    for indice, conversacion in enumerate(conversaciones, start=1):
+        conversacion_id = conversacion["id"]
+        resuelta = conversacion.get("status") == "resolved"
+
+        mensajes = cache.leer(conversacion_id) if cache and resuelta else None
+        if mensajes is None:
+            mensajes = cliente.listar_mensajes(conversacion_id)
+            # Solo se cachean las resueltas: las abiertas todavía pueden cambiar.
+            if cache and resuelta:
+                cache.guardar(conversacion_id, mensajes)
+
+        filas.append(construir_fila(conversacion, mensajes, mapeo))
+        if al_avanzar:
+            al_avanzar(indice, total)
+
+    return filas
+
+
+def escribir_csv(filas: list[dict[str, str]]) -> bytes:
+    """CSV con BOM para que Excel en Windows respete los acentos."""
+    memoria = io.StringIO()
+    escritor = csv.DictWriter(memoria, fieldnames=list(COLUMNAS), lineterminator="\r\n")
+    escritor.writeheader()
+    escritor.writerows(filas)
+    return memoria.getvalue().encode("utf-8-sig")
+
+
+def nombre_archivo(desde: date, hasta: date) -> str:
+    return f"reporte-chatwoot-{desde:%Y-%m-%d}-a-{hasta:%Y-%m-%d}.csv"
