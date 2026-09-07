@@ -1,4 +1,5 @@
 import json
+import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,8 +20,11 @@ def cliente():
     return ClienteChatwoot("https://chat.ejemplo.com", 7, "token-secreto")
 
 
-def pagina(ids):
-    return {"payload": [{"id": i} for i in ids]}
+EN_RANGO = int(datetime(2026, 9, 15, 12, 0, tzinfo=BOGOTA).timestamp())
+
+
+def pagina(ids, created_at=EN_RANGO):
+    return {"payload": [{"id": i, "created_at": created_at} for i in ids]}
 
 
 @responses.activate
@@ -44,8 +48,28 @@ def test_envia_el_token_y_el_rango_de_fechas():
     peticion = responses.calls[0].request
     assert peticion.headers["api_access_token"] == "token-secreto"
     cuerpo = peticion.body.decode() if isinstance(peticion.body, bytes) else peticion.body
-    assert str(int(DESDE.timestamp())) in cuerpo
-    assert str(int(HASTA.timestamp())) in cuerpo
+    # Se pide un día de margen por lado: DESDE es 2026-09-01 00:00 Bogotá
+    # (05:00 UTC), así que la consulta arranca el 2026-08-31 05:00 UTC.
+    assert "2026-08-31 05:00:00" in cuerpo
+    assert "2026-10-02 04:59:00" in cuerpo
+
+
+@responses.activate
+def test_las_fechas_del_filtro_van_como_texto_y_no_como_epoch():
+    """Chatwoot responde 500 si created_at llega como número epoch."""
+    responses.post(URL_FILTRO, json=pagina([]))
+
+    cliente().listar_conversaciones(DESDE, HASTA)
+
+    peticion = responses.calls[0].request
+    cuerpo = json.loads(
+        peticion.body.decode() if isinstance(peticion.body, bytes) else peticion.body
+    )
+    for clausula in cuerpo["payload"]:
+        valor = clausula["values"][0]
+        assert isinstance(valor, str), f"{valor!r} debe ser texto, no {type(valor)}"
+        assert not valor.isdigit(), f"{valor!r} parece un epoch; Chatwoot lo rechaza"
+        datetime.strptime(valor, "%Y-%m-%d %H:%M:%S")
 
 
 @responses.activate
@@ -151,3 +175,53 @@ def test_cache_crea_el_directorio_si_no_existe(tmp_path: Path):
     destino = tmp_path / "sub" / "cache"
     CacheMensajes(destino).guardar(1, [])
     assert (destino / "1.json").exists()
+
+
+@responses.activate
+def test_descarta_las_conversaciones_fuera_del_rango_exacto():
+    """La API acota por día; el recorte fino con la hora se hace aquí."""
+    antes_del_rango = int(datetime(2026, 8, 31, 23, 0, tzinfo=BOGOTA).timestamp())
+    despues_del_rango = int(datetime(2026, 10, 1, 8, 0, tzinfo=BOGOTA).timestamp())
+    responses.post(
+        URL_FILTRO,
+        json={
+            "payload": [
+                {"id": 1, "created_at": antes_del_rango},
+                {"id": 2, "created_at": EN_RANGO},
+                {"id": 3, "created_at": despues_del_rango},
+            ]
+        },
+    )
+    responses.post(URL_FILTRO, json=pagina([]))
+
+    conversaciones = cliente().listar_conversaciones(DESDE, HASTA)
+
+    assert [c["id"] for c in conversaciones] == [2]
+
+
+@responses.activate
+def test_conserva_los_bordes_exactos_del_rango():
+    responses.post(
+        URL_FILTRO,
+        json={
+            "payload": [
+                {"id": 1, "created_at": int(DESDE.timestamp())},
+                {"id": 2, "created_at": int(HASTA.timestamp())},
+            ]
+        },
+    )
+    responses.post(URL_FILTRO, json=pagina([]))
+
+    conversaciones = cliente().listar_conversaciones(DESDE, HASTA)
+
+    assert [c["id"] for c in conversaciones] == [1, 2]
+
+
+@responses.activate
+def test_descarta_conversaciones_sin_fecha_de_creacion():
+    responses.post(URL_FILTRO, json={"payload": [{"id": 1}, {"id": 2, "created_at": EN_RANGO}]})
+    responses.post(URL_FILTRO, json=pagina([]))
+
+    conversaciones = cliente().listar_conversaciones(DESDE, HASTA)
+
+    assert [c["id"] for c in conversaciones] == [2]

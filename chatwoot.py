@@ -2,7 +2,7 @@
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,28 @@ import requests
 INTENTOS_MAXIMOS = 5
 ESPERA_BASE_SEGUNDOS = 1.0
 TIEMPO_LIMITE_SEGUNDOS = 30
+
+
+FORMATO_FECHA_FILTRO = "%Y-%m-%d %H:%M:%S"
+
+
+# Chatwoot compara created_at por día, no por hora. Se pide un día de más por
+# cada lado para no perder los bordes, y el recorte fino se hace en el cliente.
+MARGEN_FILTRO = timedelta(days=1)
+
+
+def _a_texto_utc(momento: datetime) -> str:
+    """Convierte a UTC y formatea como texto, que es lo que acepta el filtro."""
+    return momento.astimezone(timezone.utc).strftime(FORMATO_FECHA_FILTRO)
+
+
+def _dentro_del_rango(conversacion: dict, desde: datetime, hasta: datetime) -> bool:
+    """Recorta con la hora exacta lo que la API solo supo acotar por día."""
+    creada = conversacion.get("created_at")
+    if not creada:
+        return False
+    momento = datetime.fromtimestamp(float(creada), timezone.utc)
+    return desde <= momento <= hasta
 
 
 class ChatwootError(Exception):
@@ -81,20 +103,28 @@ class ClienteChatwoot:
         time.sleep(ESPERA_BASE_SEGUNDOS * (2**intento))
 
     def listar_conversaciones(self, desde: datetime, hasta: datetime) -> list[dict]:
-        """Devuelve las conversaciones creadas dentro del rango, en cualquier estado."""
+        """Devuelve las conversaciones creadas dentro del rango, en cualquier estado.
+
+        Chatwoot rechaza un epoch numérico con error 500, y compara `created_at`
+        a granularidad de día ignorando la hora, con operadores estrictos: pedir
+        un solo día devuelve cero, porque ningún día está estrictamente entre el
+        día pedido y el siguiente. Por eso se consulta un rango ampliado en un
+        día por lado y se recorta aquí con la hora exacta. De paso, el recorte
+        local vuelve irrelevante en qué zona horaria interprete Chatwoot el texto.
+        """
         filtro = {
             "payload": [
                 {
                     "attribute_key": "created_at",
                     "filter_operator": "is_greater_than",
-                    "values": [int(desde.timestamp())],
+                    "values": [_a_texto_utc(desde - MARGEN_FILTRO)],
                     "query_operator": "AND",
                     "attribute_model": "standard",
                 },
                 {
                     "attribute_key": "created_at",
                     "filter_operator": "is_less_than",
-                    "values": [int(hasta.timestamp())],
+                    "values": [_a_texto_utc(hasta + MARGEN_FILTRO)],
                     "attribute_model": "standard",
                 },
             ]
@@ -108,9 +138,11 @@ class ClienteChatwoot:
             )
             lote = datos.get("payload") or []
             if not lote:
-                return conversaciones
+                break
             conversaciones.extend(lote)
             pagina += 1
+
+        return [c for c in conversaciones if _dentro_del_rango(c, desde, hasta)]
 
     def listar_mensajes(self, conversacion_id: int) -> list[dict]:
         """Devuelve todos los mensajes, del más antiguo al más reciente."""
