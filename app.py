@@ -149,12 +149,28 @@ with pestana_asesores:
         key="editor_asesores",
     )
 
-    if st.button("Guardar cambios", type="primary"):
-        limpias = [
-            (str(fila.email_asesor).strip().lower(), str(fila.area).strip())
-            for fila in editada.itertuples()
-            if str(fila.email_asesor).strip()
-        ]
+    limpias = [
+        (str(fila.email_asesor).strip().lower(), str(fila.area).strip())
+        for fila in editada.itertuples()
+        if str(fila.email_asesor).strip()
+    ]
+
+    borraria_todo = bool(actual) and not limpias
+    confirmado = True
+    if borraria_todo:
+        st.warning(
+            f"La tabla quedó vacía. Si guarda, se borrará el mapeo completo de "
+            f"{len(actual)} asesores y todos aparecerán como SIN_MAPEAR en el "
+            "próximo reporte."
+        )
+        confirmado = st.checkbox(
+            "Confirmo que quiero borrar todos los asesores.",
+            key="confirmar_borrado_asesores",
+        )
+
+    if st.button(
+        "Guardar cambios", type="primary", disabled=borraria_todo and not confirmado
+    ):
         correos = [correo for correo, _ in limpias]
         invalidas = [area for _, area in limpias if area not in AREAS_VALIDAS]
 
