@@ -153,6 +153,7 @@ def test_conversion_de_epoch_a_hora_local():
 
 
 MAPEO = {"ana@empresa.com": "Comercial", "luis@empresa.com": "RDC"}
+INBOXES = {14: "Gruas Asistencia 24", 15: "Gruas Asistencia"}
 
 
 def conversacion(**cambios):
@@ -162,6 +163,7 @@ def conversacion(**cambios):
         "created_at": EPOCH_CREACION,
         "last_activity_at": EPOCH_CIERRE,
         "labels": ["cotizacion", "whatsapp"],
+        "inbox_id": 14,
         "meta": {"assignee": {"name": "Ana Pérez", "email": "Ana@Empresa.com"}},
     }
     base.update(cambios)
@@ -175,12 +177,13 @@ MENSAJES = [
 
 
 def test_fila_completa():
-    fila = construir_fila(conversacion(), MENSAJES, MAPEO)
+    fila = construir_fila(conversacion(), MENSAJES, MAPEO, INBOXES)
     assert fila["conversacion_id"] == "101"
     assert fila["asesor"] == "Ana Pérez"
     assert fila["email_asesor"] == "Ana@Empresa.com"
     assert fila["area"] == "Comercial"
     assert fila["fecha_creacion"] == "2026-09-05 10:00"
+    assert fila["canal"] == "Gruas Asistencia 24"
     assert fila["etiquetas"] == "cotizacion;whatsapp"
     assert fila["direccion"] == "Entrante"
     assert fila["estado"] == "resuelta"
@@ -242,13 +245,17 @@ def test_nombre_del_archivo():
 
 
 class ClienteFalso:
-    def __init__(self, conversaciones, mensajes_por_id):
+    def __init__(self, conversaciones, mensajes_por_id, inboxes=None):
         self.conversaciones = conversaciones
         self.mensajes_por_id = mensajes_por_id
+        self.inboxes = inboxes if inboxes is not None else INBOXES
         self.pedidos = []
 
     def listar_conversaciones(self, desde, hasta):
         return self.conversaciones
+
+    def listar_inboxes(self):
+        return self.inboxes
 
     def listar_mensajes(self, conversacion_id):
         self.pedidos.append(conversacion_id)
@@ -286,3 +293,25 @@ def test_generar_filas_no_cachea_conversaciones_abiertas(tmp_path: Path):
     cliente = ClienteFalso([conversacion(status="open")], {101: MENSAJES})
     generar_filas(cliente, DESDE_FECHA, HASTA_FECHA, MAPEO, cache=cache)
     assert cache.leer(101) is None
+
+
+def test_canal_usa_el_nombre_del_inbox():
+    fila = construir_fila(conversacion(inbox_id=15), MENSAJES, MAPEO, INBOXES)
+    assert fila["canal"] == "Gruas Asistencia"
+
+
+def test_canal_de_un_inbox_desconocido_muestra_el_id():
+    """Un inbox creado después de consultar la lista no debe romper el reporte."""
+    fila = construir_fila(conversacion(inbox_id=99), MENSAJES, MAPEO, INBOXES)
+    assert fila["canal"] == "inbox 99"
+
+
+def test_conversacion_sin_inbox():
+    fila = construir_fila(conversacion(inbox_id=None), MENSAJES, MAPEO, INBOXES)
+    assert fila["canal"] == "SIN_CANAL"
+
+
+def test_generar_filas_consulta_los_inboxes_una_sola_vez():
+    cliente = ClienteFalso([conversacion(), conversacion(id=102)], {101: MENSAJES, 102: MENSAJES})
+    filas = generar_filas(cliente, DESDE_FECHA, HASTA_FECHA, MAPEO)
+    assert [f["canal"] for f in filas] == ["Gruas Asistencia 24", "Gruas Asistencia 24"]

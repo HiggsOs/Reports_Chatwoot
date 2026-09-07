@@ -1,8 +1,13 @@
 # Reporte de conversaciones de Chatwoot
 
 Aplicación web que genera, para el rango de fechas que se elija, un CSV con las
-conversaciones de Chatwoot: asesor, fecha, etiquetas, tiempo de resolución, si
-fue entrante o saliente, fecha de cierre y área (Comercial o RDC).
+conversaciones de Chatwoot: asesor, fecha, canal, etiquetas, tiempo de
+resolución, si fue entrante o saliente, fecha de cierre y área (Comercial o
+RDC).
+
+La columna `canal` trae el nombre del inbox por el que entró la conversación
+—por ejemplo el número de WhatsApp concreto—, no el tipo de canal, para que se
+distingan entre sí varias bandejas del mismo tipo.
 
 ## Uso
 
