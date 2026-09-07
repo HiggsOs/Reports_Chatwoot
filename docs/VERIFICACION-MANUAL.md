@@ -78,3 +78,31 @@ hash generado con `python generar_hash.py`, y no la contraseña en texto plano.
 
 **Tras un redespliegue se perdieron los asesores** — El volumen no está montado
 en `/data`. Sin él, EasyPanel recrea el contenedor vacío en cada despliegue.
+
+---
+
+## Parte C — Las transcripciones de Ringover
+
+Necesita un `RINGOVER_API_TOKEN` real y que el equipo tenga habilitada la
+función de transcripciones. Nada de esto pudo probarse contra la API real.
+
+- [ ] **C1. Un día conocido.** Genera el reporte de un día con pocas llamadas y
+      compáralo con lo que muestra el panel de Ringover.
+- [ ] **C2. Los bordes del rango.** Revisa que aparezcan las llamadas de la
+      primera y la última hora del rango. El filtro se envía en UTC y Bogotá va
+      cinco horas atrás; si faltan llamadas de la madrugada o sobran del día
+      siguiente, mirar `_a_texto_utc` en `ringover.py`.
+- [ ] **C3. Más de cien llamadas.** Elige un rango que supere las 100
+      transcripciones. Deben venir todas: la API pagina de 100 en 100 y el
+      cliente recorre las páginas con `limit_offset`.
+- [ ] **C4. Los nombres de los agentes.** Ninguna fila debería decir
+      `Usuario 12345678`. Si aparece, la API está devolviendo la llamada sin el
+      objeto `user`.
+- [ ] **C5. Una llamada saliente.** Busca una y confirma que el agente y el
+      cliente estén bien atribuidos: en las salientes el agente es quien emite
+      (canal 1), y la dirección se toma del registro de llamadas.
+- [ ] **C5b. Token sin `Calls Read`.** Prueba con un token al que le falte ese
+      permiso. El reporte debe generarse igual, con un aviso amarillo que
+      explique que las salientes pueden salir invertidas.
+- [ ] **C6. El CSV en Excel.** El diálogo lleva saltos de línea dentro de la
+      celda. Debe abrirse con los acentos correctos y sin romper las columnas.
