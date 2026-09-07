@@ -113,6 +113,7 @@ COLUMNAS = (
     "email_asesor",
     "area",
     "fecha_creacion",
+    "canal",
     "etiquetas",
     "direccion",
     "estado",
@@ -128,8 +129,22 @@ def _texto_fecha(momento: datetime | None) -> str:
     return momento.strftime(FORMATO_FECHA) if momento else ""
 
 
+SIN_CANAL = "SIN_CANAL"
+
+
+def resolver_canal(conversacion: dict, inboxes: dict[int, str]) -> str:
+    """Nombre del inbox por el que entró la conversación."""
+    inbox_id = conversacion.get("inbox_id")
+    if inbox_id is None:
+        return SIN_CANAL
+    return inboxes.get(inbox_id) or f"inbox {inbox_id}"
+
+
 def construir_fila(
-    conversacion: dict, mensajes: list[dict], mapeo: dict[str, str]
+    conversacion: dict,
+    mensajes: list[dict],
+    mapeo: dict[str, str],
+    inboxes: dict[int, str] | None = None,
 ) -> dict[str, str]:
     asignado = (conversacion.get("meta") or {}).get("assignee") or {}
     email = asignado.get("email") or ""
@@ -147,6 +162,7 @@ def construir_fila(
         "email_asesor": email,
         "area": resolver_area(email, mapeo),
         "fecha_creacion": _texto_fecha(creacion),
+        "canal": resolver_canal(conversacion, inboxes or {}),
         "etiquetas": ";".join(conversacion.get("labels") or []),
         "direccion": detectar_direccion(mensajes),
         "estado": traducir_estado(conversacion.get("status", "")),
@@ -166,6 +182,7 @@ def generar_filas(
 ) -> list[dict[str, str]]:
     """Trae las conversaciones del rango y arma una fila por cada una."""
     conversaciones = cliente.listar_conversaciones(desde, hasta)
+    inboxes = cliente.listar_inboxes()
     total = len(conversaciones)
     filas = []
 
@@ -180,7 +197,7 @@ def generar_filas(
             if cache and resuelta:
                 cache.guardar(conversacion_id, mensajes)
 
-        filas.append(construir_fila(conversacion, mensajes, mapeo))
+        filas.append(construir_fila(conversacion, mensajes, mapeo, inboxes))
         if al_avanzar:
             al_avanzar(indice, total)
 

@@ -225,3 +225,27 @@ def test_descarta_conversaciones_sin_fecha_de_creacion():
     conversaciones = cliente().listar_conversaciones(DESDE, HASTA)
 
     assert [c["id"] for c in conversaciones] == [2]
+
+
+URL_INBOXES = "https://chat.ejemplo.com/api/v1/accounts/7/inboxes"
+
+
+@responses.activate
+def test_listar_inboxes_devuelve_id_a_nombre():
+    responses.get(
+        URL_INBOXES,
+        json={
+            "payload": [
+                {"id": 14, "name": "Gruas Asistencia 24", "channel_type": "Channel::Whatsapp"},
+                {"id": 15, "name": "Gruas Asistencia", "channel_type": "Channel::Whatsapp"},
+            ]
+        },
+    )
+
+    assert cliente().listar_inboxes() == {14: "Gruas Asistencia 24", 15: "Gruas Asistencia"}
+
+
+@responses.activate
+def test_listar_inboxes_sin_inboxes():
+    responses.get(URL_INBOXES, json={"payload": []})
+    assert cliente().listar_inboxes() == {}

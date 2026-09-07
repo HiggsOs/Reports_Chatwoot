@@ -144,6 +144,16 @@ class ClienteChatwoot:
 
         return [c for c in conversaciones if _dentro_del_rango(c, desde, hasta)]
 
+    def listar_inboxes(self) -> dict[int, str]:
+        """Devuelve id de inbox → nombre, para saber por qué canal entró cada
+        conversación. Se consulta una sola vez por reporte."""
+        datos = self._pedir("GET", "/inboxes")
+        return {
+            inbox["id"]: inbox.get("name") or ""
+            for inbox in (datos.get("payload") or [])
+            if inbox.get("id") is not None
+        }
+
     def listar_mensajes(self, conversacion_id: int) -> list[dict]:
         """Devuelve todos los mensajes, del más antiguo al más reciente."""
         ruta = f"/conversations/{conversacion_id}/messages"

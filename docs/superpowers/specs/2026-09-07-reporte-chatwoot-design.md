@@ -163,6 +163,7 @@ acentos correctos.
 | `email_asesor` | Correo del agente asignado |
 | `area` | `Comercial`, `RDC`, `SIN_MAPEAR` o `SIN_ASIGNAR` |
 | `fecha_creacion` | `YYYY-MM-DD HH:MM` |
+| `canal` | Nombre del inbox por el que entró la conversación |
 | `etiquetas` | Etiquetas separadas por `;` |
 | `direccion` | `Entrante`, `Saliente` o `Indeterminado` |
 | `estado` | `abierta`, `pendiente`, `resuelta`, `pospuesta` |
