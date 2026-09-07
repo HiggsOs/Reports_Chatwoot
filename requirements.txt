@@ -1,5 +1,6 @@
 streamlit==1.39.0
 streamlit-authenticator==0.3.3
+pandas==2.2.3
 requests==2.32.3
 bcrypt==4.2.0
 pytest==8.3.3
