@@ -1,7 +1,9 @@
 """Cliente HTTP de la API de Chatwoot."""
 
+import json
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -109,3 +111,48 @@ class ClienteChatwoot:
                 return conversaciones
             conversaciones.extend(lote)
             pagina += 1
+
+    def listar_mensajes(self, conversacion_id: int) -> list[dict]:
+        """Devuelve todos los mensajes, del más antiguo al más reciente."""
+        ruta = f"/conversations/{conversacion_id}/messages"
+        recolectados: list[dict] = []
+        antes: int | None = None
+
+        while True:
+            sufijo = f"?before={antes}" if antes is not None else ""
+            datos = self._pedir("GET", f"{ruta}{sufijo}")
+            lote = datos.get("payload") or []
+            if not lote:
+                break
+            recolectados.extend(lote)
+            siguiente = min(m["id"] for m in lote)
+            if antes is not None and siguiente >= antes:
+                break
+            antes = siguiente
+
+        return sorted(recolectados, key=lambda m: m["id"])
+
+
+class CacheMensajes:
+    """Guarda en disco los mensajes de conversaciones ya resueltas."""
+
+    def __init__(self, directorio: Path) -> None:
+        self._directorio = directorio
+
+    def _archivo(self, conversacion_id: int) -> Path:
+        return self._directorio / f"{conversacion_id}.json"
+
+    def leer(self, conversacion_id: int) -> list[dict] | None:
+        archivo = self._archivo(conversacion_id)
+        if not archivo.exists():
+            return None
+        try:
+            return json.loads(archivo.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def guardar(self, conversacion_id: int, mensajes: list[dict]) -> None:
+        self._directorio.mkdir(parents=True, exist_ok=True)
+        self._archivo(conversacion_id).write_text(
+            json.dumps(mensajes, ensure_ascii=False), encoding="utf-8"
+        )

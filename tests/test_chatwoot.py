@@ -1,10 +1,12 @@
+import json
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 import responses
 
-from chatwoot import ChatwootAuthError, ChatwootError, ClienteChatwoot
+from chatwoot import CacheMensajes, ChatwootAuthError, ChatwootError, ClienteChatwoot
 
 BOGOTA = ZoneInfo("America/Bogota")
 DESDE = datetime(2026, 9, 1, 0, 0, tzinfo=BOGOTA)
@@ -75,3 +77,67 @@ def test_error_del_servidor_persistente():
     with pytest.raises(ChatwootError) as error:
         cliente().listar_conversaciones(DESDE, HASTA)
     assert "5 intentos" in str(error.value)
+
+
+URL_MENSAJES = "https://chat.ejemplo.com/api/v1/accounts/7/conversations/42/messages"
+
+
+@responses.activate
+def test_mensajes_en_orden_cronologico():
+    responses.get(
+        URL_MENSAJES,
+        json={"payload": [{"id": 10, "content": "b"}, {"id": 5, "content": "a"}]},
+    )
+    responses.get(URL_MENSAJES, json={"payload": []})
+
+    mensajes = cliente().listar_mensajes(42)
+
+    assert [m["id"] for m in mensajes] == [5, 10]
+
+
+@responses.activate
+def test_mensajes_paginan_hacia_atras_con_before():
+    responses.get(URL_MENSAJES, json={"payload": [{"id": 8}, {"id": 9}]})
+    responses.get(URL_MENSAJES, json={"payload": [{"id": 3}]})
+    responses.get(URL_MENSAJES, json={"payload": []})
+
+    mensajes = cliente().listar_mensajes(42)
+
+    assert [m["id"] for m in mensajes] == [3, 8, 9]
+    assert "before=8" in responses.calls[1].request.url
+    assert "before=3" in responses.calls[2].request.url
+
+
+@responses.activate
+def test_reintenta_tras_429_y_luego_tiene_exito():
+    responses.get(URL_MENSAJES, status=429, headers={"Retry-After": "0"}, json={})
+    responses.get(URL_MENSAJES, json={"payload": [{"id": 1}]})
+    responses.get(URL_MENSAJES, json={"payload": []})
+
+    mensajes = cliente().listar_mensajes(42)
+
+    assert [m["id"] for m in mensajes] == [1]
+    assert len(responses.calls) == 3
+
+
+def test_cache_devuelve_none_cuando_no_hay_nada(tmp_path: Path):
+    assert CacheMensajes(tmp_path).leer(42) is None
+
+
+def test_cache_guarda_y_recupera(tmp_path: Path):
+    cache = CacheMensajes(tmp_path)
+    cache.guardar(42, [{"id": 1, "content": "hola"}])
+    assert cache.leer(42) == [{"id": 1, "content": "hola"}]
+
+
+def test_cache_ignora_un_archivo_corrupto(tmp_path: Path):
+    cache = CacheMensajes(tmp_path)
+    cache.guardar(42, [{"id": 1}])
+    (tmp_path / "42.json").write_text("{roto", encoding="utf-8")
+    assert cache.leer(42) is None
+
+
+def test_cache_crea_el_directorio_si_no_existe(tmp_path: Path):
+    destino = tmp_path / "sub" / "cache"
+    CacheMensajes(destino).guardar(1, [])
+    assert (destino / "1.json").exists()
