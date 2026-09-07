@@ -186,5 +186,4 @@ with pestana_asesores:
             st.error(f"El área debe ser {' o '.join(AREAS_VALIDAS)}.")
         else:
             guardar_asesores(ruta_asesores(CFG), dict(limpias))
-            st.session_state["confirmar_borrado_asesores"] = False
             st.success(f"Se guardaron {len(limpias)} asesores.")
