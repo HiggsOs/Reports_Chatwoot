@@ -120,6 +120,16 @@ def test_reintenta_tras_429_y_luego_tiene_exito():
     assert len(responses.calls) == 3
 
 
+@responses.activate
+def test_mensajes_no_se_duplican_si_una_pagina_llega_repetida():
+    responses.get(URL_MENSAJES, json={"payload": [{"id": 10}, {"id": 9}, {"id": 8}]})
+    responses.get(URL_MENSAJES, json={"payload": [{"id": 10}, {"id": 9}, {"id": 8}]})
+
+    mensajes = cliente().listar_mensajes(42)
+
+    assert [m["id"] for m in mensajes] == [8, 9, 10]
+
+
 def test_cache_devuelve_none_cuando_no_hay_nada(tmp_path: Path):
     assert CacheMensajes(tmp_path).leer(42) is None
 

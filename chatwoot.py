@@ -124,10 +124,10 @@ class ClienteChatwoot:
             lote = datos.get("payload") or []
             if not lote:
                 break
-            recolectados.extend(lote)
             siguiente = min(m["id"] for m in lote)
             if antes is not None and siguiente >= antes:
                 break
+            recolectados.extend(lote)
             antes = siguiente
 
         return sorted(recolectados, key=lambda m: m["id"])
