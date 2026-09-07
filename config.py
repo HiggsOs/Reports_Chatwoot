@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Mapping
 
 DATA_DIR_POR_DEFECTO = "/data"
+RINGOVER_BASE_URL_POR_DEFECTO = "https://public-api.ringover.com/v2"
 
 _REQUERIDAS = (
     "CHATWOOT_BASE_URL",
@@ -29,6 +30,10 @@ class Config:
     password_hash: str
     cookie_key: str
     data_dir: Path
+    # Ringover es opcional: sin token, la app funciona igual y solo se oculta
+    # la pestaña de transcripciones.
+    ringover_token: str = ""
+    ringover_base_url: str = RINGOVER_BASE_URL_POR_DEFECTO
 
 
 def cargar_config(entorno: Mapping[str, str]) -> Config:
@@ -58,6 +63,10 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
         password_hash=entorno["APP_PASSWORD_HASH"].strip(),
         cookie_key=entorno["APP_COOKIE_KEY"].strip(),
         data_dir=Path(data_dir),
+        ringover_token=entorno.get("RINGOVER_API_TOKEN", "").strip(),
+        ringover_base_url=(
+            entorno.get("RINGOVER_BASE_URL") or RINGOVER_BASE_URL_POR_DEFECTO
+        ).strip().rstrip("/"),
     )
 
 

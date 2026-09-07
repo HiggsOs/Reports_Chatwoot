@@ -1,4 +1,4 @@
-"""Interfaz web del reporte de conversaciones de Chatwoot."""
+"""Interfaz web de los reportes de Chatwoot y de transcripciones de Ringover."""
 
 import os
 from datetime import date, datetime, time, timedelta
@@ -19,10 +19,12 @@ from reporte import (
     guardar_asesores,
     nombre_archivo,
 )
+import reporte_ringover
+from ringover import ClienteRingover, RingoverError
 
 DIAS_RANGO_AMPLIO = 90
 
-st.set_page_config(page_title="Reporte de Chatwoot", page_icon="📊")
+st.set_page_config(page_title="Reportes", page_icon="📊")
 
 
 @st.cache_resource
@@ -61,9 +63,11 @@ if st.session_state.get("authentication_status") is None:
     st.stop()
 
 autenticador.logout("Cerrar sesión", "sidebar")
-st.title("Reporte de conversaciones de Chatwoot")
+st.title("Reportes")
 
-pestana_reporte, pestana_asesores = st.tabs(["Reporte", "Asesores"])
+pestana_reporte, pestana_transcripciones, pestana_asesores = st.tabs(
+    ["Reporte", "Transcripciones", "Asesores"]
+)
 
 with pestana_reporte:
     hoy = date.today()
@@ -124,6 +128,85 @@ with pestana_reporte:
             file_name=nombre_archivo(desde, hasta),
             mime="text/csv",
         )
+
+with pestana_transcripciones:
+    st.caption(
+        "Transcripciones de las llamadas de Ringover en el rango elegido, una "
+        "fila por llamada."
+    )
+
+    if not CFG.ringover_token:
+        st.info(
+            "Falta configurar la variable de entorno RINGOVER_API_TOKEN para "
+            "consultar las transcripciones."
+        )
+    else:
+        hoy_llamadas = date.today()
+        columna_desde_ll, columna_hasta_ll = st.columns(2)
+        desde_ll = columna_desde_ll.date_input(
+            "Desde",
+            value=hoy_llamadas.replace(day=1),
+            format="YYYY-MM-DD",
+            key="desde_transcripciones",
+        )
+        hasta_ll = columna_hasta_ll.date_input(
+            "Hasta",
+            value=hoy_llamadas,
+            format="YYYY-MM-DD",
+            key="hasta_transcripciones",
+        )
+
+        if desde_ll > hasta_ll:
+            st.warning("La fecha inicial no puede ser posterior a la final.")
+
+        if st.button(
+            "Generar reporte de transcripciones",
+            type="primary",
+            disabled=desde_ll > hasta_ll,
+            key="generar_transcripciones",
+        ):
+            cliente_ringover = ClienteRingover(
+                CFG.ringover_token, CFG.ringover_base_url
+            )
+            aviso = st.empty()
+            aviso.info("Consultando transcripciones…")
+
+            def contar(traidas: int) -> None:
+                aviso.info(f"{traidas} transcripciones descargadas…")
+
+            advertencias: list[str] = []
+
+            try:
+                filas_ll = reporte_ringover.generar_filas(
+                    cliente_ringover,
+                    datetime.combine(desde_ll, time.min, tzinfo=TZ),
+                    datetime.combine(hasta_ll, time.max, tzinfo=TZ),
+                    al_avanzar=contar,
+                    al_advertir=advertencias.append,
+                )
+            except RingoverError as error:
+                aviso.empty()
+                st.error(f"No se pudo consultar Ringover.\n\n{error}")
+                st.stop()
+
+            aviso.empty()
+
+            for advertencia in advertencias:
+                st.warning(advertencia)
+
+            if not filas_ll:
+                st.warning("No hay transcripciones en el rango seleccionado.")
+                st.stop()
+
+            st.success(f"{len(filas_ll)} transcripciones encontradas.")
+            st.dataframe(pd.DataFrame(filas_ll), use_container_width=True)
+            st.download_button(
+                "Descargar CSV",
+                data=reporte_ringover.escribir_csv(filas_ll),
+                file_name=reporte_ringover.nombre_archivo(desde_ll, hasta_ll),
+                mime="text/csv",
+                key="descargar_transcripciones",
+            )
 
 with pestana_asesores:
     st.caption(

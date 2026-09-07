@@ -64,3 +64,21 @@ def test_rutas_derivadas_del_data_dir():
     cfg = cargar_config(ENTORNO_VALIDO)
     assert ruta_asesores(cfg) == Path("/data/asesores.csv")
     assert ruta_cache(cfg) == Path("/data/cache")
+
+
+def test_ringover_es_opcional_y_trae_url_por_defecto():
+    cfg = cargar_config(ENTORNO_VALIDO)
+    assert cfg.ringover_token == ""
+    assert cfg.ringover_base_url == "https://public-api.ringover.com/v2"
+
+
+def test_ringover_toma_token_y_url_del_entorno():
+    cfg = cargar_config(
+        {
+            **ENTORNO_VALIDO,
+            "RINGOVER_API_TOKEN": "  token-ringover  ",
+            "RINGOVER_BASE_URL": "https://public-api-us.ringover.com/v2/",
+        }
+    )
+    assert cfg.ringover_token == "token-ringover"
+    assert cfg.ringover_base_url == "https://public-api-us.ringover.com/v2"
