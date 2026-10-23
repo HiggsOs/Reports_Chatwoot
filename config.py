@@ -6,6 +6,8 @@ from typing import Mapping
 
 DATA_DIR_POR_DEFECTO = "/data"
 RINGOVER_BASE_URL_POR_DEFECTO = "https://public-api.ringover.com/v2"
+CLOUDTALK_BASE_URL_POR_DEFECTO = "https://my.cloudtalk.io/api"
+CLOUDTALK_AI_BASE_URL_POR_DEFECTO = "https://api.cloudtalk.io/v1"
 
 _REQUERIDAS = (
     "CHATWOOT_BASE_URL",
@@ -34,6 +36,15 @@ class Config:
     # la pestaña de transcripciones.
     ringover_token: str = ""
     ringover_base_url: str = RINGOVER_BASE_URL_POR_DEFECTO
+    # CloudTalk también es opcional y necesita el par id + secreto de la clave.
+    cloudtalk_key_id: str = ""
+    cloudtalk_key_secret: str = ""
+    cloudtalk_base_url: str = CLOUDTALK_BASE_URL_POR_DEFECTO
+    cloudtalk_ai_base_url: str = CLOUDTALK_AI_BASE_URL_POR_DEFECTO
+
+    @property
+    def cloudtalk_configurado(self) -> bool:
+        return bool(self.cloudtalk_key_id and self.cloudtalk_key_secret)
 
 
 def cargar_config(entorno: Mapping[str, str]) -> Config:
@@ -66,6 +77,14 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
         ringover_token=entorno.get("RINGOVER_API_TOKEN", "").strip(),
         ringover_base_url=(
             entorno.get("RINGOVER_BASE_URL") or RINGOVER_BASE_URL_POR_DEFECTO
+        ).strip().rstrip("/"),
+        cloudtalk_key_id=entorno.get("CLOUDTALK_API_KEY_ID", "").strip(),
+        cloudtalk_key_secret=entorno.get("CLOUDTALK_API_KEY_SECRET", "").strip(),
+        cloudtalk_base_url=(
+            entorno.get("CLOUDTALK_BASE_URL") or CLOUDTALK_BASE_URL_POR_DEFECTO
+        ).strip().rstrip("/"),
+        cloudtalk_ai_base_url=(
+            entorno.get("CLOUDTALK_AI_BASE_URL") or CLOUDTALK_AI_BASE_URL_POR_DEFECTO
         ).strip().rstrip("/"),
     )
 

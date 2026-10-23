@@ -1,4 +1,5 @@
-"""Interfaz web de los reportes de Chatwoot y de transcripciones de Ringover."""
+"""Interfaz web de los reportes de Chatwoot y de transcripciones de Ringover y
+CloudTalk."""
 
 import os
 from datetime import date, datetime, time, timedelta
@@ -19,7 +20,9 @@ from reporte import (
     guardar_asesores,
     nombre_archivo,
 )
+import reporte_cloudtalk
 import reporte_ringover
+from cloudtalk import ClienteCloudTalk, CloudTalkError
 from ringover import ClienteRingover, RingoverError
 
 DIAS_RANGO_AMPLIO = 90
@@ -65,9 +68,12 @@ if st.session_state.get("authentication_status") is None:
 autenticador.logout("Cerrar sesión", "sidebar")
 st.title("Reportes")
 
-pestana_reporte, pestana_transcripciones, pestana_asesores = st.tabs(
-    ["Reporte", "Transcripciones", "Asesores"]
-)
+(
+    pestana_reporte,
+    pestana_transcripciones,
+    pestana_cloudtalk,
+    pestana_asesores,
+) = st.tabs(["Reporte", "Transcripciones", "CloudTalk", "Asesores"])
 
 with pestana_reporte:
     hoy = date.today()
@@ -206,6 +212,90 @@ with pestana_transcripciones:
                 file_name=reporte_ringover.nombre_archivo(desde_ll, hasta_ll),
                 mime="text/csv",
                 key="descargar_transcripciones",
+            )
+
+with pestana_cloudtalk:
+    st.caption(
+        "Transcripciones de las llamadas contestadas de CloudTalk en el rango "
+        "elegido, una fila por llamada."
+    )
+
+    if not CFG.cloudtalk_configurado:
+        st.info(
+            "Falta configurar las variables de entorno CLOUDTALK_API_KEY_ID y "
+            "CLOUDTALK_API_KEY_SECRET para consultar las transcripciones."
+        )
+    else:
+        hoy_ct = date.today()
+        columna_desde_ct, columna_hasta_ct = st.columns(2)
+        desde_ct = columna_desde_ct.date_input(
+            "Desde",
+            value=hoy_ct.replace(day=1),
+            format="YYYY-MM-DD",
+            key="desde_cloudtalk",
+        )
+        hasta_ct = columna_hasta_ct.date_input(
+            "Hasta",
+            value=hoy_ct,
+            format="YYYY-MM-DD",
+            key="hasta_cloudtalk",
+        )
+
+        if desde_ct > hasta_ct:
+            st.warning("La fecha inicial no puede ser posterior a la final.")
+
+        if st.button(
+            "Generar reporte de CloudTalk",
+            type="primary",
+            disabled=desde_ct > hasta_ct,
+            key="generar_cloudtalk",
+        ):
+            cliente_cloudtalk = ClienteCloudTalk(
+                CFG.cloudtalk_key_id,
+                CFG.cloudtalk_key_secret,
+                CFG.cloudtalk_base_url,
+                CFG.cloudtalk_ai_base_url,
+            )
+            barra_ct = st.progress(0.0, text="Consultando llamadas…")
+
+            def avanzar_ct(hechas: int, total: int) -> None:
+                barra_ct.progress(
+                    hechas / total, text=f"Transcripción {hechas} de {total}…"
+                )
+
+            try:
+                filas_ct = reporte_cloudtalk.generar_filas(
+                    cliente_cloudtalk,
+                    datetime.combine(desde_ct, time.min, tzinfo=TZ),
+                    datetime.combine(hasta_ct, time.max, tzinfo=TZ),
+                    cache=CacheMensajes(ruta_cache(CFG) / "cloudtalk"),
+                    al_avanzar=avanzar_ct,
+                )
+            except CloudTalkError as error:
+                barra_ct.empty()
+                st.error(f"No se pudo consultar CloudTalk.\n\n{error}")
+                st.stop()
+
+            barra_ct.empty()
+
+            if not filas_ct:
+                st.warning("No hay llamadas contestadas en el rango seleccionado.")
+                st.stop()
+
+            transcritas = sum(
+                fila["estado"] == reporte_cloudtalk.TRANSCRITA for fila in filas_ct
+            )
+            st.success(
+                f"{len(filas_ct)} llamadas encontradas, {transcritas} con "
+                "transcripción."
+            )
+            st.dataframe(pd.DataFrame(filas_ct), use_container_width=True)
+            st.download_button(
+                "Descargar CSV",
+                data=reporte_cloudtalk.escribir_csv(filas_ct),
+                file_name=reporte_cloudtalk.nombre_archivo(desde_ct, hasta_ct),
+                mime="text/csv",
+                key="descargar_cloudtalk",
             )
 
 with pestana_asesores:

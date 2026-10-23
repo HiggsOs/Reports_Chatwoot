@@ -82,3 +82,25 @@ def test_ringover_toma_token_y_url_del_entorno():
     )
     assert cfg.ringover_token == "token-ringover"
     assert cfg.ringover_base_url == "https://public-api-us.ringover.com/v2"
+
+
+def test_cloudtalk_es_opcional():
+    cfg = cargar_config(ENTORNO_VALIDO)
+    assert not cfg.cloudtalk_configurado
+    assert cfg.cloudtalk_base_url == "https://my.cloudtalk.io/api"
+    assert cfg.cloudtalk_ai_base_url == "https://api.cloudtalk.io/v1"
+
+
+def test_cloudtalk_necesita_id_y_secreto():
+    solo_id = cargar_config({**ENTORNO_VALIDO, "CLOUDTALK_API_KEY_ID": "abc"})
+    assert not solo_id.cloudtalk_configurado
+
+    completo = cargar_config(
+        {
+            **ENTORNO_VALIDO,
+            "CLOUDTALK_API_KEY_ID": " abc ",
+            "CLOUDTALK_API_KEY_SECRET": "xyz",
+        }
+    )
+    assert completo.cloudtalk_configurado
+    assert completo.cloudtalk_key_id == "abc"

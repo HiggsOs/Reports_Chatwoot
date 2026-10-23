@@ -1,12 +1,14 @@
 # Reportes
 
-Aplicación web que genera, para el rango de fechas que se elija, dos CSV:
+Aplicación web que genera, para el rango de fechas que se elija, tres CSV:
 
 - **Conversaciones de Chatwoot**: asesor, fecha, canal, etiquetas, tiempo de
   resolución, si fue entrante o saliente, fecha de cierre y área (Comercial o
   RDC).
 - **Transcripciones de Ringover**: una fila por llamada con `call_id`, agente,
   fecha, duración, estado de la transcripción y el diálogo completo.
+- **Transcripciones de CloudTalk**: una fila por llamada contestada con
+  `call_id`, agente, fecha, dirección, duración, estado y el diálogo completo.
 
 La columna `canal` trae el nombre del inbox por el que entró la conversación
 —por ejemplo el número de WhatsApp concreto—, no el tipo de canal, para que se
@@ -14,12 +16,14 @@ distingan entre sí varias bandejas del mismo tipo.
 
 ## Uso
 
-Se entra con usuario y contraseña. Hay tres pestañas:
+Se entra con usuario y contraseña. Hay cuatro pestañas:
 
 - **Reporte**: elegir *Desde* y *Hasta*, presionar *Generar reporte* y descargar
   el CSV.
 - **Transcripciones**: mismo flujo, contra la API de Ringover. La pestaña solo
   pide datos si está configurado `RINGOVER_API_TOKEN`.
+- **CloudTalk**: mismo flujo, contra la API de CloudTalk. Solo pide datos si
+  están configurados `CLOUDTALK_API_KEY_ID` y `CLOUDTALK_API_KEY_SECRET`.
 - **Asesores**: mantener la lista de correo → área. Un asesor que no esté en la
   lista aparece como `SIN_MAPEAR` en el reporte.
 
@@ -35,6 +39,8 @@ Se entra con usuario y contraseña. Hay tres pestañas:
 | `APP_COOKIE_KEY` | Cadena aleatoria para firmar la cookie de sesión |
 | `RINGOVER_API_TOKEN` | Token público de Ringover, con el permiso `Calls Read`. Opcional: sin él, la pestaña de transcripciones queda inactiva |
 | `RINGOVER_BASE_URL` | Por defecto `https://public-api.ringover.com/v2`; usar el servidor de EE. UU. si la cuenta está allá |
+| `CLOUDTALK_API_KEY_ID` | Id de la clave de API de CloudTalk (Dashboard → Account → Settings → API Keys). Opcional |
+| `CLOUDTALK_API_KEY_SECRET` | Secreto de esa misma clave. Opcional: sin el par, la pestaña de CloudTalk queda inactiva |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -96,3 +102,36 @@ tope de 9000 filas del desplazamiento.
 
 La columna `fecha` está en hora local (`America/Bogota`), igual que el reporte de
 Chatwoot, aunque Ringover la entregue en UTC.
+
+## Notas sobre CloudTalk
+
+Las transcripciones salen de *Conversation Intelligence*, que la cuenta debe
+tener contratado. Esa API vive en `api.cloudtalk.io/v1`, aparte del resto
+(`my.cloudtalk.io/api`); ambas usan la misma clave con autenticación Basic.
+
+CloudTalk no tiene un listado de transcripciones por fecha. El reporte trae
+primero el historial de llamadas contestadas del rango
+(`GET /calls/index.json?status=answered`) y después pide la transcripción de
+cada llamada grabada (`GET /ai/calls/{id}/transcription`). Como eso es una
+petición por llamada y la API limita las peticiones por minuto, las
+transcripciones ya descargadas se guardan en `DATA_DIR/cache/cloudtalk/`: la
+primera consulta de un mes con muchas llamadas puede tardar, las siguientes
+son rápidas. Ante un `429` el cliente espera lo que indique `Retry-After` y
+reintenta.
+
+La columna `estado` dice qué pasó con cada llamada:
+
+- `transcrita`: tiene transcripción.
+- `sin transcripción`: se grabó, pero CloudTalk no tiene transcripción (por
+  ejemplo, todavía se está procesando o la función no estaba activa). No se
+  guarda en caché, así que se vuelve a consultar en el próximo reporte.
+- `sin grabación`: no se grabó, así que no puede tener transcripción.
+
+A diferencia de Ringover, CloudTalk indica de cada hablante si es agente o
+contacto, de modo que el diálogo no depende de si la llamada fue entrante o
+saliente. Si interviene un segundo agente (una transferencia) aparece como
+`Agente <id>`.
+
+La documentación no dice en qué zona horaria interpreta `date_from` y
+`date_to`, así que se pide un día de más por cada lado y el recorte exacto se
+hace con `started_at`, que viene en UTC. La columna `fecha` queda en hora local.
