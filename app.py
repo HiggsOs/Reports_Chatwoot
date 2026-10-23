@@ -250,18 +250,28 @@ with pestana_cloudtalk:
             disabled=desde_ct > hasta_ct,
             key="generar_cloudtalk",
         ):
+            barra_ct = st.progress(0.0, text="Consultando llamadas…")
+            pausa_ct = st.empty()
+
+            def avanzar_ct(hechas: int, total: int) -> None:
+                pausa_ct.empty()
+                barra_ct.progress(
+                    hechas / total, text=f"Transcripción {hechas} de {total}…"
+                )
+
+            def esperar_ct(segundos: float) -> None:
+                pausa_ct.info(
+                    "CloudTalk pidió bajar el ritmo de consultas. Se reanuda "
+                    f"solo en {segundos:.0f} s; lo ya descargado queda guardado."
+                )
+
             cliente_cloudtalk = ClienteCloudTalk(
                 CFG.cloudtalk_key_id,
                 CFG.cloudtalk_key_secret,
                 CFG.cloudtalk_base_url,
                 CFG.cloudtalk_ai_base_url,
+                al_esperar=esperar_ct,
             )
-            barra_ct = st.progress(0.0, text="Consultando llamadas…")
-
-            def avanzar_ct(hechas: int, total: int) -> None:
-                barra_ct.progress(
-                    hechas / total, text=f"Transcripción {hechas} de {total}…"
-                )
 
             try:
                 filas_ct = reporte_cloudtalk.generar_filas(
@@ -273,10 +283,12 @@ with pestana_cloudtalk:
                 )
             except CloudTalkError as error:
                 barra_ct.empty()
+                pausa_ct.empty()
                 st.error(f"No se pudo consultar CloudTalk.\n\n{error}")
                 st.stop()
 
             barra_ct.empty()
+            pausa_ct.empty()
 
             if not filas_ct:
                 st.warning("No hay llamadas contestadas en el rango seleccionado.")

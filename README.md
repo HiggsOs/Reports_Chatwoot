@@ -117,8 +117,12 @@ petición por llamada y la API admite 60 peticiones por minuto, el cliente
 espacia las peticiones a una por segundo y las
 transcripciones ya descargadas se guardan en `DATA_DIR/cache/cloudtalk/`: la
 primera consulta de un mes tarda alrededor de un minuto por cada 60 llamadas
-grabadas; las siguientes son rápidas. Ante un `429` el cliente espera lo que indique `Retry-After` y
-reintenta.
+grabadas; las siguientes son rápidas. Si aun así CloudTalk responde `429` (por ejemplo, porque otra
+integración usa la misma clave), el cliente espera lo que indique
+`Retry-After` —o un minuto completo si no lo indica—, alarga el intervalo
+entre peticiones hasta 6 s y reintenta durante varios minutos antes de
+rendirse. Si un reporte se corta, lo ya descargado queda en caché y el
+siguiente intento sigue desde ahí.
 
 La columna `estado` dice qué pasó con cada llamada:
 
