@@ -142,6 +142,12 @@ transcripciones, así que además de acotar el CSV acorta la espera:
 - **Solo llamadas con transcripción**: no consulta las llamadas sin grabación y
   quita del CSV las que no tienen texto.
 
+Después de cada reporte se muestra un resumen: llamadas en el rango, cuántas
+están grabadas, cuántas pasan los filtros y cuántas tienen transcripción. Si
+el resultado sale vacío o sin transcripciones, un aviso explica la causa más
+probable (por ejemplo, que ninguna llamada grabada tenga transcripción, lo que
+suele indicar que Conversation Intelligence no está activo).
+
 Si los catálogos no se pueden cargar, la pestaña lo avisa y el reporte sigue
 funcionando sin esas tres listas.
 

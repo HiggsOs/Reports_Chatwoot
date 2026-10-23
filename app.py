@@ -352,6 +352,7 @@ with pestana_cloudtalk:
                     f"solo en {segundos:.0f} s; lo ya descargado queda guardado."
                 )
 
+            resumen_ct = reporte_cloudtalk.Resumen()
             cliente_cloudtalk = ClienteCloudTalk(
                 CFG.cloudtalk_key_id,
                 CFG.cloudtalk_key_secret,
@@ -368,6 +369,7 @@ with pestana_cloudtalk:
                     cache=CacheMensajes(ruta_cache(CFG) / "cloudtalk"),
                     al_avanzar=avanzar_ct,
                     filtros=filtros_ct,
+                    resumen=resumen_ct,
                 )
             except CloudTalkError as error:
                 barra_ct.empty()
@@ -378,11 +380,23 @@ with pestana_cloudtalk:
             barra_ct.empty()
             pausa_ct.empty()
 
+            st.caption(
+                f"En el rango: {resumen_ct.en_rango} llamadas contestadas, "
+                f"{resumen_ct.grabadas_en_rango} grabadas · tras los filtros: "
+                f"{resumen_ct.tras_filtros} · con transcripción: "
+                f"{resumen_ct.con_transcripcion} de {resumen_ct.consultadas} "
+                "consultadas."
+            )
+            diagnostico_ct = reporte_cloudtalk.diagnosticar(resumen_ct)
+            if diagnostico_ct:
+                st.warning(diagnostico_ct)
+
             if not filas_ct:
-                st.warning(
-                    "No hay llamadas contestadas en el rango seleccionado que "
-                    "cumplan los filtros."
-                )
+                if not diagnostico_ct:
+                    st.warning(
+                        "No hay llamadas en el rango seleccionado que cumplan "
+                        "los filtros."
+                    )
                 st.stop()
 
             transcritas = sum(

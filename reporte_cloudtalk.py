@@ -218,6 +218,45 @@ def formatear_espera(segundos: float) -> str:
     return f"unas {horas} h {resto} min" if resto else f"unas {horas} h"
 
 
+@dataclass
+class Resumen:
+    """Cuántas llamadas quedaron en cada paso, para explicar un reporte vacío."""
+
+    en_rango: int = 0
+    grabadas_en_rango: int = 0
+    tras_filtros: int = 0
+    consultadas: int = 0
+    con_transcripcion: int = 0
+
+
+def diagnosticar(resumen: Resumen) -> str | None:
+    """Explica por qué faltan transcripciones, si la causa es evidente."""
+    if resumen.en_rango == 0:
+        return (
+            "CloudTalk no devolvió llamadas contestadas en el rango elegido."
+        )
+    if resumen.grabadas_en_rango == 0:
+        return (
+            f"CloudTalk devolvió {resumen.en_rango} llamadas, pero ninguna "
+            "figura como grabada, y sin grabación no hay transcripción. Revise "
+            "que la grabación de llamadas esté activa en CloudTalk."
+        )
+    if resumen.tras_filtros == 0:
+        return (
+            f"Hay {resumen.en_rango} llamadas en el rango, pero ninguna cumple "
+            "los filtros elegidos."
+        )
+    if resumen.consultadas and resumen.con_transcripcion == 0:
+        return (
+            f"Se consultaron {resumen.consultadas} llamadas grabadas y CloudTalk "
+            "no tiene transcripción de ninguna. Lo más probable es que la "
+            "cuenta no tenga activo Conversation Intelligence (Speech-to-Text), "
+            "o que no esté transcribiendo las llamadas de estos agentes o "
+            "números. Confírmelo con CloudTalk."
+        )
+    return None
+
+
 def generar_filas(
     cliente,
     desde: datetime,
@@ -225,6 +264,7 @@ def generar_filas(
     cache=None,
     al_avanzar=None,
     filtros: Filtros | None = None,
+    resumen: Resumen | None = None,
 ) -> list[dict[str, str]]:
     """Trae las llamadas contestadas del rango y la transcripción de cada una.
 
@@ -238,11 +278,12 @@ def generar_filas(
     ya incluye las pausas que haya pedido CloudTalk.
     """
     filtros = filtros or Filtros()
-    llamadas = [
-        llamada
-        for llamada in cliente.listar_llamadas(desde, hasta)
-        if cumple_filtros(llamada, filtros)
-    ]
+    resumen = resumen if resumen is not None else Resumen()
+    en_rango = cliente.listar_llamadas(desde, hasta)
+    llamadas = [llamada for llamada in en_rango if cumple_filtros(llamada, filtros)]
+    resumen.en_rango = len(en_rango)
+    resumen.grabadas_en_rango = sum(fue_grabada(llamada) for llamada in en_rango)
+    resumen.tras_filtros = len(llamadas)
 
     guardadas: dict[str, dict] = {}
     pendientes = 0
@@ -277,6 +318,7 @@ def generar_filas(
         transcripcion = None
 
         if call_id and fue_grabada(llamada):
+            resumen.consultadas += 1
             transcripcion = guardadas.get(call_id)
             if transcripcion is None:
                 if inicio_descargas is None:
@@ -288,6 +330,8 @@ def generar_filas(
                 if transcripcion is not None and cache:
                     cache.guardar(call_id, transcripcion)
 
+        if transcripcion is not None:
+            resumen.con_transcripcion += 1
         if transcripcion is not None or not filtros.solo_con_transcripcion:
             filas.append(construir_fila(llamada, transcripcion))
         if al_avanzar:

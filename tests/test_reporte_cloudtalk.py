@@ -288,3 +288,42 @@ def test_opciones_de_los_selectores():
     assert opciones_grupos(
         [{"internal_name": "soporte"}, {"internal_name": "Ventas"}, {"internal_name": ""}]
     ) == ["soporte", "Ventas"]
+
+
+# --- Resumen y diagnóstico ---------------------------------------------------
+
+from reporte_cloudtalk import Resumen, diagnosticar  # noqa: E402
+
+
+def test_resumen_cuenta_cada_paso():
+    sin_grabar = {**LLAMADA, "Cdr": {**LLAMADA["Cdr"], "id": "28", "recorded": False}}
+    sin_texto = {**LLAMADA, "Cdr": {**LLAMADA["Cdr"], "id": "29"}}
+    resumen = Resumen()
+
+    generar_filas(
+        ClienteFalso([LLAMADA, sin_grabar, sin_texto], {"27": TRANSCRIPCION}),
+        None, None, filtros=Filtros(solo_con_transcripcion=True), resumen=resumen,
+    )
+
+    assert resumen == Resumen(
+        en_rango=3, grabadas_en_rango=2, tras_filtros=2, consultadas=2,
+        con_transcripcion=1,
+    )
+    assert diagnosticar(resumen) is None
+
+
+def test_diagnostica_cuando_ninguna_grabada_tiene_transcripcion():
+    resumen = Resumen()
+    filas = generar_filas(
+        ClienteFalso([LLAMADA], {}), None, None,
+        filtros=Filtros(solo_con_transcripcion=True), resumen=resumen,
+    )
+
+    assert filas == []
+    assert "Conversation Intelligence" in diagnosticar(resumen)
+
+
+def test_diagnostica_cada_causa_de_un_reporte_vacio():
+    assert "no devolvió llamadas" in diagnosticar(Resumen())
+    assert "grabada" in diagnosticar(Resumen(en_rango=5))
+    assert "filtros" in diagnosticar(Resumen(en_rango=5, grabadas_en_rango=5))
