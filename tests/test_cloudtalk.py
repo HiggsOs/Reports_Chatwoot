@@ -16,8 +16,10 @@ URL_TRANSCRIPCION = "https://api.cloudtalk.io/v1/ai/calls/27/transcription"
 
 
 @pytest.fixture(autouse=True)
-def sin_esperas(monkeypatch):
-    monkeypatch.setattr(cloudtalk.time, "sleep", lambda _: None)
+def esperas(monkeypatch):
+    registro = []
+    monkeypatch.setattr(cloudtalk.time, "sleep", registro.append)
+    return registro
 
 
 def cliente():
@@ -157,3 +159,17 @@ def test_grabada_acepta_booleano_y_texto():
     assert not fue_grabada({"Cdr": {"recorded": False}})
     assert not fue_grabada({"Cdr": {"recorded": "0"}})
     assert not fue_grabada({})
+
+
+@responses.activate
+def test_espacia_las_peticiones_para_no_pasar_el_limite(esperas, monkeypatch):
+    reloj = iter([100.0, 100.2, 100.2])
+    monkeypatch.setattr(cloudtalk.time, "monotonic", lambda: next(reloj))
+    responses.get(URL_TRANSCRIPCION, status=404)
+
+    cliente_ct = cliente()
+    cliente_ct.obtener_transcripcion("27")
+    cliente_ct.obtener_transcripcion("27")
+
+    # La segunda petición sale 0,2 s después de la primera: espera el resto.
+    assert esperas == [pytest.approx(0.8)]

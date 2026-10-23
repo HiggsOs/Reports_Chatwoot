@@ -15,6 +15,10 @@ INTENTOS_MAXIMOS = 5
 ESPERA_BASE_SEGUNDOS = 1.0
 TIEMPO_LIMITE_SEGUNDOS = 60
 
+# La cuenta admite 60 peticiones por minuto. Se espacian de antemano para no
+# llegar al 429, que en un mes con muchas llamadas agotaría los reintentos.
+INTERVALO_MINIMO_SEGUNDOS = 60 / 60
+
 # El historial de llamadas admite como máximo 1000 filas por página.
 TAMANO_PAGINA_LLAMADAS = 1000
 TAMANO_PAGINA_SEGMENTOS = 500
@@ -82,11 +86,22 @@ class ClienteCloudTalk:
         self._base_ai = ai_base_url.rstrip("/")
         self._sesion = sesion or requests.Session()
         self._sesion.auth = (key_id, key_secret)
+        self._ultima_peticion: float | None = None
+
+    def _respetar_limite(self) -> None:
+        if self._ultima_peticion is not None:
+            faltante = INTERVALO_MINIMO_SEGUNDOS - (
+                time.monotonic() - self._ultima_peticion
+            )
+            if faltante > 0:
+                time.sleep(faltante)
+        self._ultima_peticion = time.monotonic()
 
     def _pedir(self, url: str, permitir_404: bool = False, **kwargs: Any) -> Any:
         ultimo_error = ""
 
         for intento in range(INTENTOS_MAXIMOS):
+            self._respetar_limite()
             try:
                 respuesta = self._sesion.get(
                     url, timeout=TIEMPO_LIMITE_SEGUNDOS, **kwargs

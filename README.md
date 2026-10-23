@@ -113,10 +113,11 @@ CloudTalk no tiene un listado de transcripciones por fecha. El reporte trae
 primero el historial de llamadas contestadas del rango
 (`GET /calls/index.json?status=answered`) y después pide la transcripción de
 cada llamada grabada (`GET /ai/calls/{id}/transcription`). Como eso es una
-petición por llamada y la API limita las peticiones por minuto, las
+petición por llamada y la API admite 60 peticiones por minuto, el cliente
+espacia las peticiones a una por segundo y las
 transcripciones ya descargadas se guardan en `DATA_DIR/cache/cloudtalk/`: la
-primera consulta de un mes con muchas llamadas puede tardar, las siguientes
-son rápidas. Ante un `429` el cliente espera lo que indique `Retry-After` y
+primera consulta de un mes tarda alrededor de un minuto por cada 60 llamadas
+grabadas; las siguientes son rápidas. Ante un `429` el cliente espera lo que indique `Retry-After` y
 reintenta.
 
 La columna `estado` dice qué pasó con cada llamada:
