@@ -173,3 +173,118 @@ def test_csv_con_bom_y_nombre_de_archivo():
     assert nombre_archivo(date(2026, 9, 1), date(2026, 9, 30)) == (
         "reporte-cloudtalk-2026-09-01-a-2026-09-30.csv"
     )
+
+
+# --- Filtros ---------------------------------------------------------------
+
+from reporte_cloudtalk import (  # noqa: E402
+    Filtros,
+    cumple_filtros,
+    opciones_agentes,
+    opciones_grupos,
+    opciones_numeros,
+)
+
+LLAMADA_COMPLETA = {
+    "Cdr": {
+        "id": "30",
+        "type": "outgoing",
+        "recorded": True,
+        "talking_time": "45",
+        "user_id": "1000",
+        "public_external": 573001234567,
+        "started_at": "2026-09-01T08:28:01.000Z",
+    },
+    "Agent": {"id": "1000", "fullname": "Tatiana Velandia", "groups": ["Ventas", "Soporte"]},
+    "CallNumber": {"id": "12345"},
+    "Contact": {"name": "Grúas del Norte", "company": "Transportes ABC",
+                "contact_numbers": [573109998877]},
+}
+
+
+def test_sin_filtros_entra_todo():
+    assert cumple_filtros(LLAMADA_COMPLETA, Filtros())
+    assert cumple_filtros({}, Filtros())
+
+
+def test_filtra_por_agente():
+    assert cumple_filtros(LLAMADA_COMPLETA, Filtros(agentes=frozenset({"1000", "7"})))
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(agentes=frozenset({"7"})))
+
+
+def test_filtra_por_grupo_sin_importar_mayusculas():
+    assert cumple_filtros(LLAMADA_COMPLETA, Filtros(grupos=frozenset({"ventas"})))
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(grupos=frozenset({"Cobranza"})))
+
+
+def test_filtra_por_numero_de_la_empresa():
+    assert cumple_filtros(LLAMADA_COMPLETA, Filtros(numeros=frozenset({"12345"})))
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(numeros=frozenset({"1"})))
+
+
+def test_filtra_por_direccion():
+    assert cumple_filtros(LLAMADA_COMPLETA, Filtros(direcciones=frozenset({"outgoing"})))
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(direcciones=frozenset({"incoming"})))
+
+
+def test_filtra_por_duracion_minima():
+    assert cumple_filtros(LLAMADA_COMPLETA, Filtros(duracion_minima=45))
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(duracion_minima=46))
+
+
+def test_busca_el_cliente_por_nombre_empresa_o_telefono():
+    for busqueda in ("grúas", "ABC", "+57 300 123", "3109998877"):
+        assert cumple_filtros(LLAMADA_COMPLETA, Filtros(contacto=busqueda)), busqueda
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(contacto="Otra empresa"))
+    # Muy pocos dígitos coincidirían con casi cualquier número.
+    assert not cumple_filtros(LLAMADA_COMPLETA, Filtros(contacto="57"))
+
+
+def test_solo_con_transcripcion_descarta_las_no_grabadas_y_las_sin_texto():
+    sin_grabar = {**LLAMADA, "Cdr": {**LLAMADA["Cdr"], "id": "28", "recorded": False}}
+    sin_texto = {**LLAMADA, "Cdr": {**LLAMADA["Cdr"], "id": "29"}}
+    cliente = ClienteFalso([LLAMADA, sin_grabar, sin_texto], {"27": TRANSCRIPCION})
+
+    filas = generar_filas(
+        cliente, None, None, filtros=Filtros(solo_con_transcripcion=True)
+    )
+
+    assert [f["call_id"] for f in filas] == ["27"]
+    # La no grabada ni se consultó.
+    assert cliente.pedidas == ["27", "29"]
+
+
+def test_los_filtros_evitan_pedir_transcripciones():
+    otra = {**LLAMADA, "Cdr": {**LLAMADA["Cdr"], "id": "31"},
+            "Agent": {"id": "2000", "fullname": "Otro"}}
+    cliente = ClienteFalso([LLAMADA, otra], {})
+    avances = []
+
+    filas = generar_filas(
+        cliente, None, None, filtros=Filtros(agentes=frozenset({"1000"})),
+        al_avanzar=lambda h, t, r: avances.append(t),
+    )
+
+    assert [f["call_id"] for f in filas] == ["27"]
+    assert cliente.pedidas == ["27"]
+    assert set(avances) == {1}
+
+
+def test_opciones_de_los_selectores():
+    agentes = opciones_agentes([
+        {"id": "2", "firstname": "Zoe", "lastname": "Ruiz", "extension": "1002"},
+        {"id": "1", "firstname": "Ana", "lastname": "Gil"},
+        {"id": "3", "email": "x@y.com"},
+        {"firstname": "Sin id"},
+    ])
+    assert agentes == {"1": "Ana Gil", "2": "Zoe Ruiz (ext. 1002)", "3": "x@y.com"}
+
+    numeros = opciones_numeros([
+        {"id": "123", "internal_name": "Ventas", "caller_id_e164": 573001112233},
+        {"id": "124", "caller_id_e164": "+573004445566"},
+    ])
+    assert numeros == {"124": "+573004445566", "123": "Ventas · +573001112233"}
+
+    assert opciones_grupos(
+        [{"internal_name": "soporte"}, {"internal_name": "Ventas"}, {"internal_name": ""}]
+    ) == ["soporte", "Ventas"]

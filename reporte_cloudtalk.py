@@ -3,7 +3,9 @@
 import csv
 import io
 import math
+import re
 import time
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from cloudtalk import a_fecha_utc, fue_grabada
@@ -114,6 +116,90 @@ def construir_fila(llamada: dict, transcripcion: dict | None) -> dict[str, str]:
     }
 
 
+@dataclass(frozen=True)
+class Filtros:
+    """Qué llamadas entran al reporte. Un conjunto vacío no filtra nada.
+
+    Todo se evalúa sobre el historial de llamadas, antes de pedir las
+    transcripciones: cada llamada descartada es una petición menos.
+    """
+
+    agentes: frozenset[str] = field(default_factory=frozenset)  # ids de agente
+    grupos: frozenset[str] = field(default_factory=frozenset)  # nombres de grupo
+    numeros: frozenset[str] = field(default_factory=frozenset)  # ids de número
+    direcciones: frozenset[str] = field(default_factory=frozenset)  # incoming…
+    duracion_minima: int = 0  # segundos de conversación
+    contacto: str = ""  # nombre, empresa o teléfono del cliente
+    solo_con_transcripcion: bool = False
+
+
+def _digitos(texto) -> str:
+    return re.sub(r"\D", "", str(texto or ""))
+
+
+def _segundos(valor) -> float:
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coincide_contacto(llamada: dict, busqueda: str) -> bool:
+    contacto = llamada.get("Contact") or {}
+    busqueda = busqueda.strip().lower()
+    textos = [contacto.get("name"), contacto.get("company")]
+    if any(busqueda in str(texto or "").lower() for texto in textos):
+        return True
+
+    # Por teléfono se compara solo por dígitos, para que «+57 300…» y
+    # «57300…» sean lo mismo.
+    digitos = _digitos(busqueda)
+    if len(digitos) < 4:
+        return False
+    telefonos = [(llamada.get("Cdr") or {}).get("public_external")]
+    telefonos += contacto.get("contact_numbers") or []
+    return any(digitos in _digitos(telefono) for telefono in telefonos)
+
+
+def cumple_filtros(llamada: dict, filtros: Filtros) -> bool:
+    cdr = llamada.get("Cdr") or {}
+    agente = llamada.get("Agent") or {}
+
+    if filtros.agentes:
+        id_agente = str(agente.get("id") or cdr.get("user_id") or "")
+        if id_agente not in filtros.agentes:
+            return False
+
+    if filtros.grupos:
+        # El historial trae los grupos del agente por nombre.
+        grupos_agente = {str(g).strip().lower() for g in agente.get("groups") or []}
+        if not grupos_agente & {g.strip().lower() for g in filtros.grupos}:
+            return False
+
+    if filtros.numeros:
+        id_numero = str((llamada.get("CallNumber") or {}).get("id") or "")
+        if id_numero not in filtros.numeros:
+            return False
+
+    if filtros.direcciones and (cdr.get("type") or "") not in filtros.direcciones:
+        return False
+
+    if filtros.duracion_minima:
+        duracion = cdr.get("talking_time")
+        if duracion in (None, ""):
+            duracion = cdr.get("billsec")
+        if _segundos(duracion) < filtros.duracion_minima:
+            return False
+
+    if filtros.contacto.strip() and not _coincide_contacto(llamada, filtros.contacto):
+        return False
+
+    if filtros.solo_con_transcripcion and not fue_grabada(llamada):
+        return False
+
+    return True
+
+
 def formatear_espera(segundos: float) -> str:
     """Tiempo restante en palabras, redondeado hacia arriba."""
     if segundos <= 0:
@@ -128,7 +214,12 @@ def formatear_espera(segundos: float) -> str:
 
 
 def generar_filas(
-    cliente, desde: datetime, hasta: datetime, cache=None, al_avanzar=None
+    cliente,
+    desde: datetime,
+    hasta: datetime,
+    cache=None,
+    al_avanzar=None,
+    filtros: Filtros | None = None,
 ) -> list[dict[str, str]]:
     """Trae las llamadas contestadas del rango y la transcripción de cada una.
 
@@ -141,7 +232,12 @@ def generar_filas(
     peticiones; para las demás se usa el ritmo real medido hasta el momento, que
     ya incluye las pausas que haya pedido CloudTalk.
     """
-    llamadas = cliente.listar_llamadas(desde, hasta)
+    filtros = filtros or Filtros()
+    llamadas = [
+        llamada
+        for llamada in cliente.listar_llamadas(desde, hasta)
+        if cumple_filtros(llamada, filtros)
+    ]
 
     guardadas: dict[str, dict] = {}
     pendientes = 0
@@ -187,11 +283,45 @@ def generar_filas(
                 if transcripcion is not None and cache:
                     cache.guardar(call_id, transcripcion)
 
-        filas.append(construir_fila(llamada, transcripcion))
+        if transcripcion is not None or not filtros.solo_con_transcripcion:
+            filas.append(construir_fila(llamada, transcripcion))
         if al_avanzar:
             al_avanzar(numero, len(llamadas), restante())
 
     return sorted(filas, key=lambda fila: fila["fecha"])
+
+
+def nombre_de_agente_catalogo(agente: dict) -> str:
+    partes = [(agente.get("firstname") or "").strip(), (agente.get("lastname") or "").strip()]
+    nombre = " ".join(p for p in partes if p) or (agente.get("email") or "").strip()
+    nombre = nombre or f"Agente {agente.get('id')}"
+    extension = agente.get("extension")
+    return f"{nombre} (ext. {extension})" if extension else nombre
+
+
+def opciones_agentes(agentes: list[dict]) -> dict[str, str]:
+    """id → etiqueta, ordenado por nombre."""
+    opciones = {
+        str(a["id"]): nombre_de_agente_catalogo(a) for a in agentes if a.get("id")
+    }
+    return dict(sorted(opciones.items(), key=lambda par: par[1].lower()))
+
+
+def opciones_numeros(numeros: list[dict]) -> dict[str, str]:
+    opciones = {}
+    for numero in numeros:
+        if not numero.get("id"):
+            continue
+        nombre = (numero.get("internal_name") or "").strip()
+        telefono = numero.get("caller_id_e164")
+        telefono = f"+{_digitos(telefono)}" if telefono else ""
+        opciones[str(numero["id"])] = " · ".join(p for p in (nombre, telefono) if p)
+    return dict(sorted(opciones.items(), key=lambda par: par[1].lower()))
+
+
+def opciones_grupos(grupos: list[dict]) -> list[str]:
+    nombres = {(g.get("internal_name") or "").strip() for g in grupos}
+    return sorted((n for n in nombres if n), key=str.lower)
 
 
 def escribir_csv(filas: list[dict[str, str]]) -> bytes:

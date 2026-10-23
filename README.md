@@ -127,6 +127,24 @@ entre peticiones hasta 6 s y reintenta durante varios minutos antes de
 rendirse. Si un reporte se corta, lo ya descargado queda en caché y el
 siguiente intento sigue desde ahí.
 
+### Filtros
+
+La pestaña tiene un panel **Filtros** que se aplica antes de descargar las
+transcripciones, así que además de acotar el CSV acorta la espera:
+
+- **Agentes**, **Grupos** y **Números de la empresa**: listas que se llenan con
+  `GET /agents`, `/groups` y `/numbers` y se guardan una hora. El grupo se
+  compara con los grupos del agente que trae cada llamada en el historial.
+- **Dirección**: entrante, saliente o interna.
+- **Duración mínima**: descarta cuelgues y buzones.
+- **Cliente**: busca en el nombre y la empresa del contacto, o en su teléfono
+  comparando solo dígitos (mínimo 4).
+- **Solo llamadas con transcripción**: no consulta las llamadas sin grabación y
+  quita del CSV las que no tienen texto.
+
+Si los catálogos no se pueden cargar, la pestaña lo avisa y el reporte sigue
+funcionando sin esas tres listas.
+
 La columna `estado` dice qué pasó con cada llamada:
 
 - `transcrita`: tiene transcripción.

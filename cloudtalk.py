@@ -93,12 +93,14 @@ class ClienteCloudTalk:
         ai_base_url: str = AI_BASE_URL_POR_DEFECTO,
         sesion: requests.Session | None = None,
         al_esperar=None,
+        intentos_limite: int = INTENTOS_MAXIMOS_LIMITE,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._base_ai = ai_base_url.rstrip("/")
         self._sesion = sesion or requests.Session()
         self._sesion.auth = (key_id, key_secret)
         self._al_esperar = al_esperar
+        self._intentos_limite = intentos_limite
         self._intervalo = INTERVALO_MINIMO_SEGUNDOS
         self._ultima_peticion: float | None = None
 
@@ -119,7 +121,7 @@ class ClienteCloudTalk:
         limites = 0
         ultimo_error = ""
 
-        while fallos < INTENTOS_MAXIMOS and limites < INTENTOS_MAXIMOS_LIMITE:
+        while fallos < INTENTOS_MAXIMOS and limites < self._intentos_limite:
             self._respetar_limite()
             try:
                 respuesta = self._sesion.get(
@@ -180,28 +182,22 @@ class ClienteCloudTalk:
             self._al_esperar(espera)
         time.sleep(espera)
 
-    def listar_llamadas(self, desde: datetime, hasta: datetime) -> list[dict]:
-        """Devuelve las llamadas contestadas que empezaron dentro del rango.
-
-        Las perdidas no tienen conversación que transcribir, así que se
-        excluyen desde el filtro.
-        """
-        llamadas: list[dict] = []
+    def _listar_paginado(self, ruta: str, params: dict | None = None) -> list[dict]:
+        """Recorre todas las páginas de un listado envuelto en `responseData`."""
+        filas: list[dict] = []
 
         for pagina in range(1, PAGINAS_MAXIMAS + 1):
             datos = self._pedir(
-                f"{self._base}/calls/index.json",
+                f"{self._base}{ruta}",
                 params={
-                    "date_from": _a_texto_utc(desde - MARGEN_FILTRO),
-                    "date_to": _a_texto_utc(hasta + MARGEN_FILTRO),
-                    "status": "answered",
+                    **(params or {}),
                     "limit": TAMANO_PAGINA_LLAMADAS,
                     "page": pagina,
                 },
             )
             respuesta = (datos or {}).get("responseData") or {}
             lote = respuesta.get("data") or []
-            llamadas.extend(lote)
+            filas.extend(lote)
 
             try:
                 total_paginas = int(respuesta.get("pageCount") or 0)
@@ -210,7 +206,40 @@ class ClienteCloudTalk:
             if not lote or pagina >= total_paginas:
                 break
 
+        return filas
+
+    def listar_llamadas(self, desde: datetime, hasta: datetime) -> list[dict]:
+        """Devuelve las llamadas contestadas que empezaron dentro del rango.
+
+        Las perdidas no tienen conversación que transcribir, así que se
+        excluyen desde el filtro.
+        """
+        llamadas = self._listar_paginado(
+            "/calls/index.json",
+            {
+                "date_from": _a_texto_utc(desde - MARGEN_FILTRO),
+                "date_to": _a_texto_utc(hasta + MARGEN_FILTRO),
+                "status": "answered",
+            },
+        )
         return [ll for ll in llamadas if _dentro_del_rango(ll, desde, hasta)]
+
+    def listar_agentes(self) -> list[dict]:
+        return [f["Agent"] for f in self._listar_paginado("/agents/index.json")
+                if isinstance(f.get("Agent"), dict)]
+
+    def listar_grupos(self) -> list[dict]:
+        # El ejemplo de la documentación usa `Group` y el esquema `Groups`.
+        grupos = []
+        for fila in self._listar_paginado("/groups/index.json"):
+            grupo = fila.get("Group") or fila.get("Groups")
+            if isinstance(grupo, dict):
+                grupos.append(grupo)
+        return grupos
+
+    def listar_numeros(self) -> list[dict]:
+        return [f["CallNumber"] for f in self._listar_paginado("/numbers/index.json")
+                if isinstance(f.get("CallNumber"), dict)]
 
     def obtener_transcripcion(self, call_id: str) -> dict | None:
         """Devuelve la transcripción de una llamada, o None si no tiene.

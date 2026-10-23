@@ -224,3 +224,31 @@ def test_espacia_las_peticiones_para_no_pasar_el_limite(esperas, monkeypatch):
 
     # La segunda petición sale 0,2 s después de la primera: espera el resto.
     assert esperas == [pytest.approx(0.8)]
+
+
+@responses.activate
+def test_catalogos_de_agentes_grupos_y_numeros():
+    base = "https://my.cloudtalk.io/api"
+    responses.get(f"{base}/agents/index.json",
+                  json=pagina_llamadas([{"Agent": {"id": "99", "firstname": "John"}}]))
+    responses.get(f"{base}/groups/index.json",
+                  json=pagina_llamadas([{"Group": {"id": "1", "internal_name": "A"}},
+                                        {"Groups": {"id": "2", "internal_name": "B"}}]))
+    responses.get(f"{base}/numbers/index.json",
+                  json=pagina_llamadas([{"CallNumber": {"id": "123"}}]))
+
+    cliente_ct = cliente()
+
+    assert cliente_ct.listar_agentes() == [{"id": "99", "firstname": "John"}]
+    assert [g["internal_name"] for g in cliente_ct.listar_grupos()] == ["A", "B"]
+    assert cliente_ct.listar_numeros() == [{"id": "123"}]
+    assert "limit=1000" in responses.calls[0].request.url
+
+
+@responses.activate
+def test_se_puede_rendir_al_primer_limite():
+    responses.get(URL_TRANSCRIPCION, status=429, headers={"Retry-After": "0"})
+
+    with pytest.raises(CloudTalkError):
+        ClienteCloudTalk("id", "s", intentos_limite=1).obtener_transcripcion("27")
+    assert len(responses.calls) == 1
