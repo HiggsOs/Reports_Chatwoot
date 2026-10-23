@@ -1,5 +1,6 @@
 from datetime import date
 
+import reporte_cloudtalk
 from chatwoot import CacheMensajes
 from reporte_cloudtalk import (
     COLUMNAS,
@@ -8,6 +9,7 @@ from reporte_cloudtalk import (
     TRANSCRITA,
     construir_fila,
     escribir_csv,
+    formatear_espera,
     generar_filas,
     nombre_agente,
     nombre_archivo,
@@ -121,9 +123,47 @@ def test_avisa_el_avance():
     avances = []
     generar_filas(
         ClienteFalso([LLAMADA], {}), None, None,
-        al_avanzar=lambda hechas, total: avances.append((hechas, total)),
+        al_avanzar=lambda hechas, total, _: avances.append((hechas, total)),
     )
-    assert avances == [(1, 1)]
+    assert avances == [(0, 1), (1, 1)]
+
+
+def test_estima_con_el_ritmo_del_cliente_y_luego_con_el_medido(monkeypatch):
+    llamadas = [
+        {**LLAMADA, "Cdr": {**LLAMADA["Cdr"], "id": str(i)}} for i in range(4)
+    ]
+    cliente = ClienteFalso(llamadas, {})
+    cliente.segundos_por_peticion = 1.0
+    # Cada descarga tarda 3 s según el reloj: más lento que el ritmo nominal.
+    reloj = iter([0.0, 3.0, 6.0, 9.0, 12.0])
+    monkeypatch.setattr(reporte_cloudtalk.time, "monotonic", lambda: next(reloj))
+    restantes = []
+
+    generar_filas(cliente, None, None, al_avanzar=lambda h, t, r: restantes.append(r))
+
+    # Antes de empezar: 4 pendientes a 1 s. Después: lo que falta a 3 s cada una.
+    assert restantes == [4.0, 9.0, 6.0, 3.0, 0.0]
+
+
+def test_las_que_estan_en_cache_no_suman_tiempo(tmp_path):
+    cache = CacheMensajes(tmp_path)
+    cache.guardar("27", TRANSCRIPCION)
+    restantes = []
+
+    generar_filas(
+        ClienteFalso([LLAMADA], {}), None, None, cache=cache,
+        al_avanzar=lambda h, t, r: restantes.append(r),
+    )
+
+    assert restantes == [0.0, 0.0]
+
+
+def test_formatear_espera():
+    assert formatear_espera(0) == ""
+    assert formatear_espera(45) == "menos de 1 min"
+    assert formatear_espera(61) == "unos 2 min"
+    assert formatear_espera(3600) == "unas 1 h"
+    assert formatear_espera(5000) == "unas 1 h 24 min"
 
 
 def test_csv_con_bom_y_nombre_de_archivo():

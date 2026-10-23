@@ -102,6 +102,11 @@ class ClienteCloudTalk:
         self._intervalo = INTERVALO_MINIMO_SEGUNDOS
         self._ultima_peticion: float | None = None
 
+    @property
+    def segundos_por_peticion(self) -> float:
+        """Ritmo actual entre peticiones; sirve para estimar cuánto falta."""
+        return self._intervalo
+
     def _respetar_limite(self) -> None:
         if self._ultima_peticion is not None:
             faltante = self._intervalo - (time.monotonic() - self._ultima_peticion)

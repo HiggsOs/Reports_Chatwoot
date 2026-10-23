@@ -253,11 +253,13 @@ with pestana_cloudtalk:
             barra_ct = st.progress(0.0, text="Consultando llamadas…")
             pausa_ct = st.empty()
 
-            def avanzar_ct(hechas: int, total: int) -> None:
+            def avanzar_ct(hechas: int, total: int, restante: float) -> None:
                 pausa_ct.empty()
-                barra_ct.progress(
-                    hechas / total, text=f"Transcripción {hechas} de {total}…"
-                )
+                texto = f"Transcripción {hechas} de {total}"
+                espera = reporte_cloudtalk.formatear_espera(restante)
+                if espera:
+                    texto += f" · faltan {espera}"
+                barra_ct.progress(hechas / total, text=texto + "…")
 
             def esperar_ct(segundos: float) -> None:
                 pausa_ct.info(

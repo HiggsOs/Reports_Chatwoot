@@ -2,6 +2,8 @@
 
 import csv
 import io
+import math
+import time
 from datetime import date, datetime
 
 from cloudtalk import a_fecha_utc, fue_grabada
@@ -112,6 +114,19 @@ def construir_fila(llamada: dict, transcripcion: dict | None) -> dict[str, str]:
     }
 
 
+def formatear_espera(segundos: float) -> str:
+    """Tiempo restante en palabras, redondeado hacia arriba."""
+    if segundos <= 0:
+        return ""
+    minutos = math.ceil(segundos / 60)
+    if minutos <= 1:
+        return "menos de 1 min"
+    if minutos < 60:
+        return f"unos {minutos} min"
+    horas, resto = divmod(minutos, 60)
+    return f"unas {horas} h {resto} min" if resto else f"unas {horas} h"
+
+
 def generar_filas(
     cliente, desde: datetime, hasta: datetime, cache=None, al_avanzar=None
 ) -> list[dict[str, str]]:
@@ -120,18 +135,53 @@ def generar_filas(
     CloudTalk no tiene un listado de transcripciones: hay que pedirlas llamada
     por llamada. Las que ya se descargaron se guardan en disco, porque una
     transcripción terminada no cambia y la API limita las peticiones por minuto.
+
+    `al_avanzar(hechas, total, segundos_restantes)` recibe una estimación de lo
+    que falta. Las llamadas que ya están en caché no cuentan, porque no hacen
+    peticiones; para las demás se usa el ritmo real medido hasta el momento, que
+    ya incluye las pausas que haya pedido CloudTalk.
     """
     llamadas = cliente.listar_llamadas(desde, hasta)
-    filas = []
 
+    guardadas: dict[str, dict] = {}
+    pendientes = 0
+    for llamada in llamadas:
+        call_id = str((llamada.get("Cdr") or {}).get("id") or "")
+        if not call_id or not fue_grabada(llamada):
+            continue
+        en_cache = cache.leer(call_id) if cache else None
+        if en_cache is None:
+            pendientes += 1
+        else:
+            guardadas[call_id] = en_cache
+
+    ritmo_inicial = getattr(cliente, "segundos_por_peticion", 1.0)
+    descargadas = 0
+    inicio_descargas: float | None = None
+
+    def restante() -> float:
+        faltan = pendientes - descargadas
+        if descargadas and inicio_descargas is not None:
+            ritmo = (time.monotonic() - inicio_descargas) / descargadas
+        else:
+            ritmo = ritmo_inicial
+        return faltan * ritmo
+
+    if al_avanzar and llamadas:
+        al_avanzar(0, len(llamadas), restante())
+
+    filas = []
     for numero, llamada in enumerate(llamadas, start=1):
         call_id = str((llamada.get("Cdr") or {}).get("id") or "")
         transcripcion = None
 
         if call_id and fue_grabada(llamada):
-            transcripcion = cache.leer(call_id) if cache else None
+            transcripcion = guardadas.get(call_id)
             if transcripcion is None:
+                if inicio_descargas is None:
+                    inicio_descargas = time.monotonic()
                 transcripcion = cliente.obtener_transcripcion(call_id)
+                descargadas += 1
                 # Si todavía no hay transcripción no se guarda nada: puede
                 # aparecer más tarde.
                 if transcripcion is not None and cache:
@@ -139,7 +189,7 @@ def generar_filas(
 
         filas.append(construir_fila(llamada, transcripcion))
         if al_avanzar:
-            al_avanzar(numero, len(llamadas))
+            al_avanzar(numero, len(llamadas), restante())
 
     return sorted(filas, key=lambda fila: fila["fecha"])
 

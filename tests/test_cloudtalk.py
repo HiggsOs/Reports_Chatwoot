@@ -141,7 +141,7 @@ def test_un_429_alarga_el_intervalo_entre_peticiones():
     cliente_ct = cliente()
     cliente_ct.obtener_transcripcion("27")
 
-    assert cliente_ct._intervalo == pytest.approx(1.5)
+    assert cliente_ct.segundos_por_peticion == pytest.approx(1.5)
 
 
 @responses.activate
