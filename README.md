@@ -135,7 +135,7 @@ transcripciones, así que además de acotar el CSV acorta la espera:
 - **Agentes**, **Grupos** y **Números de la empresa**: listas que se llenan con
   `GET /agents`, `/groups` y `/numbers` y se guardan una hora. El grupo se
   compara con los grupos del agente que trae cada llamada en el historial.
-- **Dirección**: entrante, saliente o interna.
+- **Dirección**: entrante (inbound), saliente (outbound) o interna.
 - **Duración mínima**: descarta cuelgues y buzones.
 - **Cliente**: busca en el nombre y la empresa del contacto, o en su teléfono
   comparando solo dígitos (mínimo 4).

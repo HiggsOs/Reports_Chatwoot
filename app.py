@@ -295,10 +295,11 @@ with pestana_cloudtalk:
                 help="Línea por la que entró o salió la llamada.",
             )
             direcciones_ct = columna_b.multiselect(
-                "Dirección",
+                "Dirección (inbound / outbound)",
                 options=list(reporte_cloudtalk.DIRECCIONES),
-                format_func=lambda d: reporte_cloudtalk.DIRECCIONES[d].capitalize(),
+                format_func=reporte_cloudtalk.ETIQUETAS_DIRECCION.get,
                 key="direcciones_cloudtalk",
+                help="Entrante: el cliente llamó. Saliente: el agente llamó.",
             )
             duracion_ct = columna_a.number_input(
                 "Duración mínima de la conversación (segundos)",

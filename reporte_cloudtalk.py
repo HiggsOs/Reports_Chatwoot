@@ -23,6 +23,11 @@ COLUMNAS = (
 )
 
 DIRECCIONES = {"incoming": "entrante", "outgoing": "saliente", "internal": "interna"}
+ETIQUETAS_DIRECCION = {
+    "incoming": "Entrante (inbound)",
+    "outgoing": "Saliente (outbound)",
+    "internal": "Interna",
+}
 
 TRANSCRITA = "transcrita"
 SIN_TRANSCRIPCION = "sin transcripción"
