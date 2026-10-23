@@ -10,7 +10,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py chatwoot.py reporte.py ringover.py reporte_ringover.py app.py generar_hash.py ./
+COPY config.py chatwoot.py reporte.py ringover.py reporte_ringover.py cloudtalk.py reporte_cloudtalk.py app.py generar_hash.py ./
 
 RUN mkdir -p /data
 VOLUME ["/data"]
