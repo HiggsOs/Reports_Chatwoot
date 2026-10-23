@@ -35,6 +35,20 @@ def obtener_config():
     return cargar_config(os.environ)
 
 
+@st.cache_data(ttl=3600, show_spinner="Cargando agentes, grupos y números de CloudTalk…")
+def catalogo_cloudtalk(key_id: str, key_secret: str, base_url: str) -> dict:
+    """Opciones de los filtros. Cambian poco, así que se guardan una hora; un
+    error no se guarda y se reintenta en la próxima carga de la página."""
+    # Sin paciencia ante el límite: es mejor mostrar la pestaña sin opciones
+    # que dejarla congelada varios minutos.
+    cliente = ClienteCloudTalk(key_id, key_secret, base_url, intentos_limite=1)
+    return {
+        "agentes": reporte_cloudtalk.opciones_agentes(cliente.listar_agentes()),
+        "grupos": reporte_cloudtalk.opciones_grupos(cliente.listar_grupos()),
+        "numeros": reporte_cloudtalk.opciones_numeros(cliente.listar_numeros()),
+    }
+
+
 try:
     CFG = obtener_config()
 except ConfigError as error:
@@ -244,24 +258,107 @@ with pestana_cloudtalk:
         if desde_ct > hasta_ct:
             st.warning("La fecha inicial no puede ser posterior a la final.")
 
+        try:
+            catalogo = catalogo_cloudtalk(
+                CFG.cloudtalk_key_id, CFG.cloudtalk_key_secret, CFG.cloudtalk_base_url
+            )
+        except CloudTalkError as error:
+            catalogo = {"agentes": {}, "grupos": [], "numeros": {}}
+            st.warning(
+                "No se pudieron cargar los agentes, grupos y números para los "
+                f"filtros; el reporte funciona igual sin ellos.\n\n{error}"
+            )
+
+        with st.expander("Filtros", expanded=False):
+            st.caption(
+                "Se aplican antes de descargar las transcripciones, así que "
+                "también acortan la espera. Un filtro vacío no descarta nada."
+            )
+            columna_a, columna_b = st.columns(2)
+            agentes_ct = columna_a.multiselect(
+                "Agentes",
+                options=list(catalogo["agentes"]),
+                format_func=lambda i: catalogo["agentes"].get(i, i),
+                key="agentes_cloudtalk",
+            )
+            grupos_ct = columna_b.multiselect(
+                "Grupos",
+                options=catalogo["grupos"],
+                key="grupos_cloudtalk",
+                help="Llamadas atendidas por agentes de estos grupos.",
+            )
+            numeros_ct = columna_a.multiselect(
+                "Números de la empresa",
+                options=list(catalogo["numeros"]),
+                format_func=lambda i: catalogo["numeros"].get(i, i),
+                key="numeros_cloudtalk",
+                help="Línea por la que entró o salió la llamada.",
+            )
+            direcciones_ct = columna_b.multiselect(
+                "Dirección (inbound / outbound)",
+                options=list(reporte_cloudtalk.DIRECCIONES),
+                format_func=reporte_cloudtalk.ETIQUETAS_DIRECCION.get,
+                key="direcciones_cloudtalk",
+                help="Entrante: el cliente llamó. Saliente: el agente llamó.",
+            )
+            duracion_ct = columna_a.number_input(
+                "Duración mínima de la conversación (segundos)",
+                min_value=0,
+                value=0,
+                step=10,
+                key="duracion_cloudtalk",
+                help="Descarta llamadas cortas, como buzones o cuelgues.",
+            )
+            contacto_ct = columna_b.text_input(
+                "Cliente",
+                key="contacto_cloudtalk",
+                placeholder="Nombre, empresa o teléfono",
+            )
+            solo_transcritas_ct = st.checkbox(
+                "Solo llamadas con transcripción",
+                key="solo_transcritas_cloudtalk",
+            )
+
+        filtros_ct = reporte_cloudtalk.Filtros(
+            agentes=frozenset(agentes_ct),
+            grupos=frozenset(grupos_ct),
+            numeros=frozenset(numeros_ct),
+            direcciones=frozenset(direcciones_ct),
+            duracion_minima=int(duracion_ct),
+            contacto=contacto_ct,
+            solo_con_transcripcion=solo_transcritas_ct,
+        )
+
         if st.button(
             "Generar reporte de CloudTalk",
             type="primary",
             disabled=desde_ct > hasta_ct,
             key="generar_cloudtalk",
         ):
+            barra_ct = st.progress(0.0, text="Consultando llamadas…")
+            pausa_ct = st.empty()
+
+            def avanzar_ct(hechas: int, total: int, restante: float) -> None:
+                pausa_ct.empty()
+                texto = f"Transcripción {hechas} de {total}"
+                espera = reporte_cloudtalk.formatear_espera(restante)
+                if espera:
+                    texto += f" · faltan {espera}"
+                barra_ct.progress(hechas / total, text=texto + "…")
+
+            def esperar_ct(segundos: float) -> None:
+                pausa_ct.info(
+                    "CloudTalk pidió bajar el ritmo de consultas. Se reanuda "
+                    f"solo en {segundos:.0f} s; lo ya descargado queda guardado."
+                )
+
             cliente_cloudtalk = ClienteCloudTalk(
                 CFG.cloudtalk_key_id,
                 CFG.cloudtalk_key_secret,
                 CFG.cloudtalk_base_url,
                 CFG.cloudtalk_ai_base_url,
+                al_esperar=esperar_ct,
             )
-            barra_ct = st.progress(0.0, text="Consultando llamadas…")
-
-            def avanzar_ct(hechas: int, total: int) -> None:
-                barra_ct.progress(
-                    hechas / total, text=f"Transcripción {hechas} de {total}…"
-                )
 
             try:
                 filas_ct = reporte_cloudtalk.generar_filas(
@@ -270,16 +367,22 @@ with pestana_cloudtalk:
                     datetime.combine(hasta_ct, time.max, tzinfo=TZ),
                     cache=CacheMensajes(ruta_cache(CFG) / "cloudtalk"),
                     al_avanzar=avanzar_ct,
+                    filtros=filtros_ct,
                 )
             except CloudTalkError as error:
                 barra_ct.empty()
+                pausa_ct.empty()
                 st.error(f"No se pudo consultar CloudTalk.\n\n{error}")
                 st.stop()
 
             barra_ct.empty()
+            pausa_ct.empty()
 
             if not filas_ct:
-                st.warning("No hay llamadas contestadas en el rango seleccionado.")
+                st.warning(
+                    "No hay llamadas contestadas en el rango seleccionado que "
+                    "cumplan los filtros."
+                )
                 st.stop()
 
             transcritas = sum(

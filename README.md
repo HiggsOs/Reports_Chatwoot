@@ -113,11 +113,37 @@ CloudTalk no tiene un listado de transcripciones por fecha. El reporte trae
 primero el historial de llamadas contestadas del rango
 (`GET /calls/index.json?status=answered`) y después pide la transcripción de
 cada llamada grabada (`GET /ai/calls/{id}/transcription`). Como eso es una
-petición por llamada y la API limita las peticiones por minuto, las
+petición por llamada y la API admite 60 peticiones por minuto, el cliente
+espacia las peticiones a una por segundo y las
 transcripciones ya descargadas se guardan en `DATA_DIR/cache/cloudtalk/`: la
-primera consulta de un mes con muchas llamadas puede tardar, las siguientes
-son rápidas. Ante un `429` el cliente espera lo que indique `Retry-After` y
-reintenta.
+primera consulta de un mes tarda alrededor de un minuto por cada 60 llamadas
+grabadas; las siguientes son rápidas. La barra de progreso muestra cuánto falta
+aproximadamente: arranca con el ritmo de una petición por segundo y se ajusta
+con el ritmo real, pausas incluidas; las llamadas que ya están en caché no
+suman tiempo. Si aun así CloudTalk responde `429` (por ejemplo, porque otra
+integración usa la misma clave), el cliente espera lo que indique
+`Retry-After` —o un minuto completo si no lo indica—, alarga el intervalo
+entre peticiones hasta 6 s y reintenta durante varios minutos antes de
+rendirse. Si un reporte se corta, lo ya descargado queda en caché y el
+siguiente intento sigue desde ahí.
+
+### Filtros
+
+La pestaña tiene un panel **Filtros** que se aplica antes de descargar las
+transcripciones, así que además de acotar el CSV acorta la espera:
+
+- **Agentes**, **Grupos** y **Números de la empresa**: listas que se llenan con
+  `GET /agents`, `/groups` y `/numbers` y se guardan una hora. El grupo se
+  compara con los grupos del agente que trae cada llamada en el historial.
+- **Dirección**: entrante (inbound), saliente (outbound) o interna.
+- **Duración mínima**: descarta cuelgues y buzones.
+- **Cliente**: busca en el nombre y la empresa del contacto, o en su teléfono
+  comparando solo dígitos (mínimo 4).
+- **Solo llamadas con transcripción**: no consulta las llamadas sin grabación y
+  quita del CSV las que no tienen texto.
+
+Si los catálogos no se pueden cargar, la pestaña lo avisa y el reporte sigue
+funcionando sin esas tres listas.
 
 La columna `estado` dice qué pasó con cada llamada:
 

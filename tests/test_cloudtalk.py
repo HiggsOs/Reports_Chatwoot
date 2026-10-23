@@ -16,8 +16,10 @@ URL_TRANSCRIPCION = "https://api.cloudtalk.io/v1/ai/calls/27/transcription"
 
 
 @pytest.fixture(autouse=True)
-def sin_esperas(monkeypatch):
-    monkeypatch.setattr(cloudtalk.time, "sleep", lambda _: None)
+def esperas(monkeypatch):
+    registro = []
+    monkeypatch.setattr(cloudtalk.time, "sleep", registro.append)
+    return registro
 
 
 def cliente():
@@ -94,10 +96,61 @@ def test_credenciales_rechazadas():
 
 @responses.activate
 def test_reintenta_ante_limite_de_peticiones():
-    responses.get(URL_LLAMADAS, status=429, headers={"Retry-After": "0"})
+    responses.get(URL_LLAMADAS, status=429, headers={"Retry-After": "7"})
     responses.get(URL_LLAMADAS, json=pagina_llamadas([llamada(1)]))
+    avisos = []
 
-    assert len(cliente().listar_llamadas(DESDE, HASTA)) == 1
+    cliente_ct = ClienteCloudTalk("id", "secreto", al_esperar=avisos.append)
+
+    assert len(cliente_ct.listar_llamadas(DESDE, HASTA)) == 1
+    assert avisos == [7.0]
+
+
+@responses.activate
+def test_sin_retry_after_espera_la_ventana_completa(esperas):
+    responses.get(URL_TRANSCRIPCION, status=429)
+    responses.get(URL_TRANSCRIPCION, status=404)
+
+    assert cliente().obtener_transcripcion("27") is None
+    assert 60.0 in esperas
+
+
+@responses.activate
+def test_aguanta_muchos_limites_seguidos_antes_de_rendirse():
+    for _ in range(cloudtalk.INTENTOS_MAXIMOS_LIMITE - 1):
+        responses.get(URL_TRANSCRIPCION, status=429)
+    responses.get(URL_TRANSCRIPCION, status=404)
+
+    assert cliente().obtener_transcripcion("27") is None
+
+
+@responses.activate
+def test_se_rinde_si_el_limite_no_cede():
+    responses.get(URL_TRANSCRIPCION, status=429)
+
+    with pytest.raises(CloudTalkError, match="429"):
+        cliente().obtener_transcripcion("27")
+    assert len(responses.calls) == cloudtalk.INTENTOS_MAXIMOS_LIMITE
+
+
+@responses.activate
+def test_un_429_alarga_el_intervalo_entre_peticiones():
+    responses.get(URL_TRANSCRIPCION, status=429, headers={"Retry-After": "0"})
+    responses.get(URL_TRANSCRIPCION, status=404)
+
+    cliente_ct = cliente()
+    cliente_ct.obtener_transcripcion("27")
+
+    assert cliente_ct.segundos_por_peticion == pytest.approx(1.5)
+
+
+@responses.activate
+def test_errores_del_servidor_tienen_su_propio_tope():
+    responses.get(URL_TRANSCRIPCION, status=503)
+
+    with pytest.raises(CloudTalkError, match="503"):
+        cliente().obtener_transcripcion("27")
+    assert len(responses.calls) == cloudtalk.INTENTOS_MAXIMOS
 
 
 @responses.activate
@@ -157,3 +210,45 @@ def test_grabada_acepta_booleano_y_texto():
     assert not fue_grabada({"Cdr": {"recorded": False}})
     assert not fue_grabada({"Cdr": {"recorded": "0"}})
     assert not fue_grabada({})
+
+
+@responses.activate
+def test_espacia_las_peticiones_para_no_pasar_el_limite(esperas, monkeypatch):
+    reloj = iter([100.0, 100.2, 100.2])
+    monkeypatch.setattr(cloudtalk.time, "monotonic", lambda: next(reloj))
+    responses.get(URL_TRANSCRIPCION, status=404)
+
+    cliente_ct = cliente()
+    cliente_ct.obtener_transcripcion("27")
+    cliente_ct.obtener_transcripcion("27")
+
+    # La segunda petición sale 0,2 s después de la primera: espera el resto.
+    assert esperas == [pytest.approx(0.8)]
+
+
+@responses.activate
+def test_catalogos_de_agentes_grupos_y_numeros():
+    base = "https://my.cloudtalk.io/api"
+    responses.get(f"{base}/agents/index.json",
+                  json=pagina_llamadas([{"Agent": {"id": "99", "firstname": "John"}}]))
+    responses.get(f"{base}/groups/index.json",
+                  json=pagina_llamadas([{"Group": {"id": "1", "internal_name": "A"}},
+                                        {"Groups": {"id": "2", "internal_name": "B"}}]))
+    responses.get(f"{base}/numbers/index.json",
+                  json=pagina_llamadas([{"CallNumber": {"id": "123"}}]))
+
+    cliente_ct = cliente()
+
+    assert cliente_ct.listar_agentes() == [{"id": "99", "firstname": "John"}]
+    assert [g["internal_name"] for g in cliente_ct.listar_grupos()] == ["A", "B"]
+    assert cliente_ct.listar_numeros() == [{"id": "123"}]
+    assert "limit=1000" in responses.calls[0].request.url
+
+
+@responses.activate
+def test_se_puede_rendir_al_primer_limite():
+    responses.get(URL_TRANSCRIPCION, status=429, headers={"Retry-After": "0"})
+
+    with pytest.raises(CloudTalkError):
+        ClienteCloudTalk("id", "s", intentos_limite=1).obtener_transcripcion("27")
+    assert len(responses.calls) == 1

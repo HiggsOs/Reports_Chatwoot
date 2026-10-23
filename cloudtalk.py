@@ -11,9 +11,24 @@ BASE_URL_POR_DEFECTO = "https://my.cloudtalk.io/api"
 # servidor y no envuelve la respuesta en `responseData`.
 AI_BASE_URL_POR_DEFECTO = "https://api.cloudtalk.io/v1"
 
+# Errores de red o del servidor.
 INTENTOS_MAXIMOS = 5
 ESPERA_BASE_SEGUNDOS = 1.0
 TIEMPO_LIMITE_SEGUNDOS = 60
+
+# La cuenta admite 60 peticiones por minuto. Se espacian de antemano para no
+# llegar al 429; si aun así llega (otra integración usa la misma clave, o las
+# transcripciones tienen un límite propio), el intervalo se alarga solo.
+INTERVALO_MINIMO_SEGUNDOS = 1.0
+INTERVALO_MAXIMO_SEGUNDOS = 6.0
+FACTOR_FRENADO = 1.5
+
+# Ante un 429 sin Retry-After se espera la ventana completa del límite. Se
+# tolera hasta media hora de pausas por petición antes de rendirse, para no
+# tirar a la basura un reporte largo por un límite pasajero.
+INTENTOS_MAXIMOS_LIMITE = 30
+ESPERA_LIMITE_SEGUNDOS = 60.0
+ESPERA_LIMITE_MAXIMA_SEGUNDOS = 300.0
 
 # El historial de llamadas admite como máximo 1000 filas por página.
 TAMANO_PAGINA_LLAMADAS = 1000
@@ -77,82 +92,112 @@ class ClienteCloudTalk:
         base_url: str = BASE_URL_POR_DEFECTO,
         ai_base_url: str = AI_BASE_URL_POR_DEFECTO,
         sesion: requests.Session | None = None,
+        al_esperar=None,
+        intentos_limite: int = INTENTOS_MAXIMOS_LIMITE,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._base_ai = ai_base_url.rstrip("/")
         self._sesion = sesion or requests.Session()
         self._sesion.auth = (key_id, key_secret)
+        self._al_esperar = al_esperar
+        self._intentos_limite = intentos_limite
+        self._intervalo = INTERVALO_MINIMO_SEGUNDOS
+        self._ultima_peticion: float | None = None
+
+    @property
+    def segundos_por_peticion(self) -> float:
+        """Ritmo actual entre peticiones; sirve para estimar cuánto falta."""
+        return self._intervalo
+
+    def _respetar_limite(self) -> None:
+        if self._ultima_peticion is not None:
+            faltante = self._intervalo - (time.monotonic() - self._ultima_peticion)
+            if faltante > 0:
+                time.sleep(faltante)
+        self._ultima_peticion = time.monotonic()
 
     def _pedir(self, url: str, permitir_404: bool = False, **kwargs: Any) -> Any:
+        fallos = 0
+        limites = 0
         ultimo_error = ""
 
-        for intento in range(INTENTOS_MAXIMOS):
+        while fallos < INTENTOS_MAXIMOS and limites < self._intentos_limite:
+            self._respetar_limite()
             try:
                 respuesta = self._sesion.get(
                     url, timeout=TIEMPO_LIMITE_SEGUNDOS, **kwargs
                 )
             except requests.RequestException as error:
                 ultimo_error = str(error)
-            else:
-                if respuesta.status_code in (401, 403):
-                    raise CloudTalkAuthError(
-                        "CloudTalk rechazó la petición. Revise las variables "
-                        "CLOUDTALK_API_KEY_ID y CLOUDTALK_API_KEY_SECRET, y que la "
-                        "cuenta tenga Conversation Intelligence para las "
-                        "transcripciones."
-                    )
-                if respuesta.status_code == 404 and permitir_404:
-                    return None
-                if respuesta.status_code < 400:
-                    return respuesta.json()
-                if respuesta.status_code != 429 and respuesta.status_code < 500:
-                    raise CloudTalkError(
-                        f"CloudTalk respondió {respuesta.status_code} en {url}: "
-                        f"{respuesta.text[:200]}"
-                    )
-                ultimo_error = f"HTTP {respuesta.status_code}"
-                self._esperar(respuesta, intento)
+                time.sleep(ESPERA_BASE_SEGUNDOS * (2**fallos))
+                fallos += 1
                 continue
 
-            time.sleep(ESPERA_BASE_SEGUNDOS * (2**intento))
+            if respuesta.status_code in (401, 403):
+                raise CloudTalkAuthError(
+                    "CloudTalk rechazó la petición. Revise las variables "
+                    "CLOUDTALK_API_KEY_ID y CLOUDTALK_API_KEY_SECRET, y que la "
+                    "cuenta tenga Conversation Intelligence para las "
+                    "transcripciones."
+                )
+            if respuesta.status_code == 404 and permitir_404:
+                return None
+            if respuesta.status_code < 400:
+                return respuesta.json()
+            if respuesta.status_code == 429:
+                ultimo_error = "HTTP 429"
+                self._frenar()
+                self._esperar_limite(respuesta)
+                limites += 1
+                continue
+            if respuesta.status_code < 500:
+                raise CloudTalkError(
+                    f"CloudTalk respondió {respuesta.status_code} en {url}: "
+                    f"{respuesta.text[:200]}"
+                )
+            ultimo_error = f"HTTP {respuesta.status_code}"
+            time.sleep(ESPERA_BASE_SEGUNDOS * (2**fallos))
+            fallos += 1
 
         raise CloudTalkError(
-            f"CloudTalk no respondió tras {INTENTOS_MAXIMOS} intentos en {url} "
+            f"CloudTalk no respondió tras {fallos + limites} intentos en {url} "
             f"(último error: {ultimo_error})."
         )
 
-    def _esperar(self, respuesta: requests.Response, intento: int) -> None:
+    def _frenar(self) -> None:
+        self._intervalo = min(
+            INTERVALO_MAXIMO_SEGUNDOS, self._intervalo * FACTOR_FRENADO
+        )
+
+    def _esperar_limite(self, respuesta: requests.Response) -> None:
+        espera = ESPERA_LIMITE_SEGUNDOS
         cabecera = respuesta.headers.get("Retry-After")
         if cabecera:
             try:
-                time.sleep(float(cabecera))
-                return
+                espera = float(cabecera)
             except ValueError:
                 pass
-        time.sleep(ESPERA_BASE_SEGUNDOS * (2**intento))
+        espera = max(0.0, min(espera, ESPERA_LIMITE_MAXIMA_SEGUNDOS))
+        if self._al_esperar:
+            self._al_esperar(espera)
+        time.sleep(espera)
 
-    def listar_llamadas(self, desde: datetime, hasta: datetime) -> list[dict]:
-        """Devuelve las llamadas contestadas que empezaron dentro del rango.
-
-        Las perdidas no tienen conversación que transcribir, así que se
-        excluyen desde el filtro.
-        """
-        llamadas: list[dict] = []
+    def _listar_paginado(self, ruta: str, params: dict | None = None) -> list[dict]:
+        """Recorre todas las páginas de un listado envuelto en `responseData`."""
+        filas: list[dict] = []
 
         for pagina in range(1, PAGINAS_MAXIMAS + 1):
             datos = self._pedir(
-                f"{self._base}/calls/index.json",
+                f"{self._base}{ruta}",
                 params={
-                    "date_from": _a_texto_utc(desde - MARGEN_FILTRO),
-                    "date_to": _a_texto_utc(hasta + MARGEN_FILTRO),
-                    "status": "answered",
+                    **(params or {}),
                     "limit": TAMANO_PAGINA_LLAMADAS,
                     "page": pagina,
                 },
             )
             respuesta = (datos or {}).get("responseData") or {}
             lote = respuesta.get("data") or []
-            llamadas.extend(lote)
+            filas.extend(lote)
 
             try:
                 total_paginas = int(respuesta.get("pageCount") or 0)
@@ -161,7 +206,40 @@ class ClienteCloudTalk:
             if not lote or pagina >= total_paginas:
                 break
 
+        return filas
+
+    def listar_llamadas(self, desde: datetime, hasta: datetime) -> list[dict]:
+        """Devuelve las llamadas contestadas que empezaron dentro del rango.
+
+        Las perdidas no tienen conversación que transcribir, así que se
+        excluyen desde el filtro.
+        """
+        llamadas = self._listar_paginado(
+            "/calls/index.json",
+            {
+                "date_from": _a_texto_utc(desde - MARGEN_FILTRO),
+                "date_to": _a_texto_utc(hasta + MARGEN_FILTRO),
+                "status": "answered",
+            },
+        )
         return [ll for ll in llamadas if _dentro_del_rango(ll, desde, hasta)]
+
+    def listar_agentes(self) -> list[dict]:
+        return [f["Agent"] for f in self._listar_paginado("/agents/index.json")
+                if isinstance(f.get("Agent"), dict)]
+
+    def listar_grupos(self) -> list[dict]:
+        # El ejemplo de la documentación usa `Group` y el esquema `Groups`.
+        grupos = []
+        for fila in self._listar_paginado("/groups/index.json"):
+            grupo = fila.get("Group") or fila.get("Groups")
+            if isinstance(grupo, dict):
+                grupos.append(grupo)
+        return grupos
+
+    def listar_numeros(self) -> list[dict]:
+        return [f["CallNumber"] for f in self._listar_paginado("/numbers/index.json")
+                if isinstance(f.get("CallNumber"), dict)]
 
     def obtener_transcripcion(self, call_id: str) -> dict | None:
         """Devuelve la transcripción de una llamada, o None si no tiene.
