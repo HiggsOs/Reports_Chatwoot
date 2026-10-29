@@ -715,6 +715,11 @@ Decisiones de la etapa 6:
   grabación estéreo se transcribe por canal y cuesta el doble.
 - La página donde se ve la fila elegida la recuerda por su id: Streamlit la
   olvida cuando cambian los datos de la tabla (al transcribir o asignar).
+- El modelo se elige al transcribir (una llamada o un lote). Cada estrategia
+  publica sus `modelos` y da una variante con `con_modelo`, con las capacidades
+  y el precio de ese modelo; el servicio y las pantallas no conocen los modelos
+  de ningún proveedor. El pedido de la cola guarda el modelo (migración 0007).
+  Con un modelo elegido a mano no se usa el respaldo: se pidió ese.
 La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
 etapa.
 

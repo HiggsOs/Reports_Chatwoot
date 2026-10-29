@@ -41,6 +41,7 @@ from panel.transcripcion.base import (
     OpcionesTranscripcion,
     Segmento,
     TranscripcionError,
+    TranscripcionNoDisponible,
 )
 
 registro = logging.getLogger(__name__)
@@ -124,14 +125,39 @@ class ServicioTranscripcion:
         self._opciones = opciones
         self._canal_agente = canal_agente
         self._ahora = ahora
+        self._variantes: dict[tuple[str, str], EstrategiaTranscripcion] = {}
+
+    def estrategia(self, proveedor: str | None = None, modelo: str | None = None) -> EstrategiaTranscripcion:
+        """La estrategia de ese proveedor (por defecto, la principal) con ese
+        modelo (por defecto, el configurado). Lanza TranscripcionNoDisponible
+        si el proveedor no está o no tiene ese modelo."""
+        nombre = proveedor or (self.cadena[0] if self.cadena else None)
+        if nombre not in self.estrategias:
+            raise TranscripcionNoDisponible("No hay un proveedor de transcripción configurado.")
+        base = self.estrategias[nombre]
+        if not modelo or modelo == base.modelo:
+            return base
+        if (nombre, modelo) not in self._variantes:
+            self._variantes[(nombre, modelo)] = base.con_modelo(modelo)
+        return self._variantes[(nombre, modelo)]
 
     # --- Transcribir ---------------------------------------------------------
 
-    def transcribir(self, llamada_id: int, proveedor: str | None = None) -> ResultadoTranscripcion:
+    def transcribir(
+        self, llamada_id: int, proveedor: str | None = None, modelo: str | None = None
+    ) -> ResultadoTranscripcion:
+        """Sin proveedor ni modelo prueba la cadena de respaldo. Elegir uno de
+        los dos es pedir exactamente ese: si falla, no se prueba otro."""
+        if modelo and not proveedor:
+            proveedor = self.cadena[0] if self.cadena else None
         cadena = [proveedor] if proveedor else self.cadena
         cadena = [nombre for nombre in cadena if nombre in self.estrategias]
         if not cadena:
             return ResultadoTranscripcion(error="No hay un proveedor de transcripción configurado.")
+        try:
+            elegidas = [self.estrategia(nombre, modelo) for nombre in cadena]
+        except TranscripcionNoDisponible as error:
+            return ResultadoTranscripcion(error=str(error))
 
         audio = self._audio.escuchar(llamada_id)
         if audio.mp3 is None:
@@ -144,8 +170,7 @@ class ServicioTranscripcion:
         plan = preparacion.preparar(audio.mp3, nombre, self._canal_agente)
 
         errores = []
-        for nombre_estrategia in cadena:
-            estrategia = self.estrategias[nombre_estrategia]
+        for nombre_estrategia, estrategia in zip(cadena, elegidas):
             plan_usado = plan
             if plan.necesita_marcas and not estrategia.capacidades.marcas_de_tiempo:
                 plan_usado = preparacion.como_mono(plan, audio.mp3, nombre)
@@ -242,7 +267,9 @@ class ServicioTranscripcion:
 
     # --- Cola ----------------------------------------------------------------
 
-    def encolar(self, llamada_ids: list[int], proveedor: str | None = None) -> int:
+    def encolar(
+        self, llamada_ids: list[int], proveedor: str | None = None, modelo: str | None = None
+    ) -> int:
         """Pide transcribir esas llamadas. Las que ya tienen un pedido abierto
         no se repiten. Devuelve cuántos pedidos se crearon."""
         with unidad_de_trabajo(self._fabrica) as sesion:
@@ -256,7 +283,8 @@ class ServicioTranscripcion:
             )
             nuevos = [lid for lid in dict.fromkeys(llamada_ids) if lid not in abiertos]
             sesion.add_all(
-                TrabajoTranscripcion(llamada_id=lid, proveedor=proveedor) for lid in nuevos
+                TrabajoTranscripcion(llamada_id=lid, proveedor=proveedor, modelo=modelo)
+                for lid in nuevos
             )
             return len(nuevos)
 
@@ -284,11 +312,11 @@ class ServicioTranscripcion:
             )
             for trabajo in tomados:
                 trabajo.estado = TRABAJO_EN_PROCESO
-            pedidos = [(t.id, t.llamada_id, t.proveedor) for t in tomados]
+            pedidos = [(t.id, t.llamada_id, t.proveedor, t.modelo) for t in tomados]
 
         resumen = ResumenCola()
-        for trabajo_id, llamada_id, proveedor in pedidos:
-            resultado = self.transcribir(llamada_id, proveedor)
+        for trabajo_id, llamada_id, proveedor, modelo in pedidos:
+            resultado = self.transcribir(llamada_id, proveedor, modelo)
             with unidad_de_trabajo(self._fabrica) as sesion:
                 trabajo = sesion.get(TrabajoTranscripcion, trabajo_id)
                 trabajo.intentos += 1
@@ -311,14 +339,18 @@ class ServicioTranscripcion:
 
     # --- Costos --------------------------------------------------------------
 
-    def costo_de_lote(self, llamada_ids: list[int], proveedor: str | None = None) -> tuple[float, Decimal | None]:
+    def costo_de_lote(
+        self, llamada_ids: list[int], proveedor: str | None = None, modelo: str | None = None
+    ) -> tuple[float, Decimal | None]:
         """Minutos de audio de esas llamadas y lo que costaría transcribirlas."""
-        nombre = proveedor or (self.cadena[0] if self.cadena else None)
         with unidad_de_trabajo(self._fabrica) as sesion:
             segundos = sesion.scalar(
                 select(func.coalesce(func.sum(Llamada.duracion_s), 0)).where(Llamada.id.in_(llamada_ids))
             )
-        estrategia = self.estrategias.get(nombre) if nombre else None
+        try:
+            estrategia = self.estrategia(proveedor, modelo)
+        except TranscripcionNoDisponible:
+            estrategia = None
         costo = estrategia.costo_estimado(float(segundos)) if estrategia else None
         return float(segundos) / 60, costo
 

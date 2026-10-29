@@ -42,6 +42,52 @@ def _costo(costo) -> str:
     return "sin precio configurado" if costo is None else f"{costo:.4f} USD"
 
 
+def _que_hace(capacidades) -> str:
+    if capacidades.diarizacion:
+        return "separa hablantes, con tiempos"
+    if capacidades.marcas_de_tiempo:
+        return "con tiempos, sin separar hablantes"
+    return "solo texto"
+
+
+def _proveedores(transcripcion: ServicioTranscripcion) -> list[str]:
+    return list(transcripcion.cadena) + [
+        n for n in transcripcion.estrategias if n not in transcripcion.cadena and n != "falsa"
+    ]
+
+
+def elegir_modelo(
+    transcripcion: ServicioTranscripcion, clave: str
+) -> tuple[str | None, str | None] | None:
+    """Selectores de proveedor y modelo. Devuelve (proveedor, modelo), o
+    (None, None) si se dejó lo configurado: así se usa la cadena de respaldo."""
+    nombres = _proveedores(transcripcion)
+    if not nombres:
+        return None
+    izquierda, derecha = st.columns(2)
+    proveedor = izquierda.selectbox(
+        "Proveedor", nombres, format_func=titulo_proveedor, key=f"proveedor-{clave}",
+        help="El primero es el configurado; elegir otro sirve para comparar.",
+    )
+    estrategia = transcripcion.estrategia(proveedor)
+
+    def etiqueta(modelo: str) -> str:
+        variante = transcripcion.estrategia(proveedor, modelo)
+        partes = [modelo, _que_hace(variante.capacidades)]
+        if modelo == estrategia.modelo:
+            partes.append("configurado")
+        return " · ".join(partes)
+
+    modelo = derecha.selectbox(
+        "Modelo", estrategia.modelos, format_func=etiqueta, key=f"modelo-{clave}-{proveedor}",
+        help="Con el que separa hablantes no hace falta decir quién es quién por "
+        "canal; los de solo texto no dan tiempos.",
+    )
+    if proveedor == nombres[0] and modelo == estrategia.modelo:
+        return None, None
+    return proveedor, modelo
+
+
 def dialogo(vista: VistaTranscripcion) -> None:
     lineas = []
     for segmento in vista.segmentos:
@@ -114,27 +160,21 @@ def _quien_es_quien(transcripcion, vista: VistaTranscripcion, llamada_id: int) -
 
 
 def _pedir(transcripcion: ServicioTranscripcion, llamada_id: int, ya_hay: bool) -> None:
-    nombres = list(transcripcion.cadena) + [
-        n for n in transcripcion.estrategias if n not in transcripcion.cadena and n != "falsa"
-    ]
-    if not nombres:
+    elegido = elegir_modelo(transcripcion, str(llamada_id))
+    if elegido is None:
         return
+    proveedor, modelo = elegido
+    _, costo = transcripcion.costo_de_lote([llamada_id], proveedor, modelo)
     izquierda, derecha = st.columns([2, 1])
-    proveedor = izquierda.selectbox(
-        "Proveedor", nombres, format_func=titulo_proveedor, key=f"proveedor-{llamada_id}",
-        help="El primero es el configurado; elegir otro sirve para comparar.",
-    )
-    _, costo = transcripcion.costo_de_lote([llamada_id], proveedor)
-    derecha.write("")
+    izquierda.caption(f"Costo estimado: {_costo(costo)}.")
     texto = "Transcribir de nuevo" if ya_hay else "Transcribir"
     if derecha.button(texto, key=f"transcribir-{llamada_id}", type="secondary" if ya_hay else "primary"):
         with st.spinner("Transcribiendo… puede tardar un minuto."):
-            resultado = transcripcion.transcribir(llamada_id, proveedor)
+            resultado = transcripcion.transcribir(llamada_id, proveedor, modelo)
         if resultado.error:
             st.error(resultado.error)
         else:
             st.rerun()
-    st.caption(f"Costo estimado: {_costo(costo)}.")
 
 
 def lote(transcripcion: ServicioTranscripcion | None, filas) -> None:
@@ -149,7 +189,11 @@ def lote(transcripcion: ServicioTranscripcion | None, filas) -> None:
         if not pendientes:
             st.caption("Todas las llamadas del listado ya están transcritas o no tienen grabación.")
             return
-        minutos, costo = transcripcion.costo_de_lote(pendientes)
+        elegido = elegir_modelo(transcripcion, "lote")
+        if elegido is None:
+            return
+        proveedor, modelo = elegido
+        minutos, costo = transcripcion.costo_de_lote(pendientes, proveedor, modelo)
         st.markdown(
             f"{len(pendientes)} llamadas, unos **{minutos:.0f} minutos** de audio. "
             f"Costo estimado: **{_costo(costo)}**."
@@ -159,8 +203,33 @@ def lote(transcripcion: ServicioTranscripcion | None, filas) -> None:
             "ciclo. El avance se ve en la página Transcripción."
         )
         if st.button(f"Agregar {len(pendientes)} a la cola", type="primary", key="lote-encolar"):
-            creados = transcripcion.encolar(pendientes)
+            creados = transcripcion.encolar(pendientes, proveedor, modelo)
             st.success(f"Se agregaron {creados} llamadas a la cola.")
+
+
+def _modelos(transcripcion: ServicioTranscripcion) -> None:
+    filas = []
+    for proveedor in _proveedores(transcripcion):
+        estrategia = transcripcion.estrategia(proveedor)
+        for modelo in estrategia.modelos:
+            variante = transcripcion.estrategia(proveedor, modelo)
+            precio = variante.costo_estimado(60)
+            filas.append(
+                {
+                    "Proveedor": titulo_proveedor(proveedor),
+                    "Modelo": modelo + (" (configurado)" if modelo == estrategia.modelo else ""),
+                    "Qué devuelve": _que_hace(variante.capacidades),
+                    "USD por minuto": "sin precio" if precio is None else f"{precio:.4f}",
+                }
+            )
+    with st.expander("Modelos que se pueden elegir"):
+        st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
+        st.caption(
+            "Se elige el modelo al transcribir una llamada o un lote. El configurado "
+            "(OPENAI_MODELO_TRANSCRIPCION) es el de por defecto, y solo con él se usa el "
+            "proveedor de respaldo si falla. Los precios salen de OPENAI_PRECIO_MINUTO y "
+            "OPENAI_PRECIOS_POR_MODELO."
+        )
 
 
 def pagina(fabrica: sessionmaker[Session], cfg: Config, transcripcion: ServicioTranscripcion | None) -> None:
@@ -181,6 +250,7 @@ def pagina(fabrica: sessionmaker[Session], cfg: Config, transcripcion: ServicioT
             + ("da marcas de tiempo" if capacidades.marcas_de_tiempo else "no da marcas de tiempo")
             + f" · en estéreo, el agente es el canal {cfg.cloudtalk_canal_agente}."
         )
+        _modelos(transcripcion)
 
     with unidad_de_trabajo(fabrica) as sesion:
         cola = consultas.estado_cola(sesion)

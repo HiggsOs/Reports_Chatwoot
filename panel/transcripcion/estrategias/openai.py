@@ -12,6 +12,9 @@ Formatos y parámetros tomados de los tipos del SDK oficial de OpenAI (3.41.0).
 OpenAI anunció el apagado de todos los modelos salvo `gpt-transcribe` para el
 2027-02-26. Con un modelo nuevo, OPENAI_FORMATO_RESPUESTA indica qué formato
 pedir sin tocar el código.
+
+Desde el panel se puede elegir cualquiera de los modelos de `MODELOS` para una
+llamada o un lote; el configurado es el que se usa si no se elige otro.
 """
 
 import time
@@ -40,25 +43,54 @@ ESPERA_BASE_SEGUNDOS = 2.0
 ESPERA_MAXIMA_SEGUNDOS = 60.0
 
 DIARIZADO, DETALLADO, SIMPLE = "diarized_json", "verbose_json", "json"
+# Los que transcriben, según el SDK de OpenAI (3.41.0).
+MODELOS = (
+    "gpt-4o-transcribe-diarize",
+    "gpt-transcribe",
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-mini-transcribe-2025-12-15",
+    "whisper-1",
+)
 FORMATOS_POR_MODELO = {
     "gpt-4o-transcribe-diarize": DIARIZADO,
     "whisper-1": DETALLADO,
 }
 # Modelos que aceptan `prompt` (el vocabulario como contexto) y los que
 # aceptan `keywords`. El diarizado no acepta ninguno de los dos.
-CON_PROMPT = ("whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe")
+CON_PROMPT = (
+    "whisper-1",
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-mini-transcribe-2025-12-15",
+)
 CON_KEYWORDS = ("gpt-transcribe",)
 
 
-def _decimal(texto: str | None) -> Decimal | None:
+def _decimal(texto: str | None, variable: str = "OPENAI_PRECIO_MINUTO") -> Decimal | None:
     if not (texto or "").strip():
         return None
     try:
         return Decimal(texto.strip().replace(",", "."))
     except InvalidOperation as error:
-        raise TranscripcionNoDisponible(
-            f"OPENAI_PRECIO_MINUTO no es un número: {texto!r}"
-        ) from error
+        raise TranscripcionNoDisponible(f"{variable} no es un número: {texto!r}") from error
+
+
+def _precios_por_modelo(texto: str | None) -> dict[str, Decimal]:
+    """«whisper-1=0.006; gpt-4o-mini-transcribe=0.003» → {modelo: precio}.
+
+    Se separan con «;» porque el precio puede llevar coma decimal."""
+    precios = {}
+    for par in (texto or "").replace("\n", ";").split(";"):
+        if not par.strip():
+            continue
+        modelo, igual, precio = par.partition("=")
+        if not igual or not modelo.strip():
+            raise TranscripcionNoDisponible(
+                f"OPENAI_PRECIOS_POR_MODELO: «{par.strip()}» debería ser modelo=precio."
+            )
+        precios[modelo.strip()] = _decimal(precio, "OPENAI_PRECIOS_POR_MODELO")
+    return precios
 
 
 @registrar
@@ -74,7 +106,10 @@ class EstrategiaOpenAI:
         precio_minuto: Decimal | None = None,
         url: str = URL_POR_DEFECTO,
         sesion: requests.Session | None = None,
+        precios: Mapping[str, Decimal | None] | None = None,
     ) -> None:
+        """`precio_minuto`: el del modelo configurado. `precios`: los de los
+        otros modelos que se pueden elegir."""
         self._clave = clave
         self._modelo = modelo
         self._formato = formato or FORMATOS_POR_MODELO.get(modelo, SIMPLE)
@@ -82,7 +117,10 @@ class EstrategiaOpenAI:
             raise TranscripcionNoDisponible(
                 f"OPENAI_FORMATO_RESPUESTA debe ser {DIARIZADO}, {DETALLADO} o {SIMPLE}."
             )
-        self._precio = precio_minuto
+        self._precios = dict(precios or {})
+        if precio_minuto is not None:
+            self._precios[modelo] = precio_minuto
+        self._precio = self._precios.get(modelo)
         self._url = url.rstrip("/")
         self._sesion = sesion or requests.Session()
 
@@ -97,11 +135,31 @@ class EstrategiaOpenAI:
             formato=(valores.get("OPENAI_FORMATO_RESPUESTA") or "").strip() or None,
             precio_minuto=_decimal(valores.get("OPENAI_PRECIO_MINUTO")),
             url=(valores.get("OPENAI_BASE_URL") or URL_POR_DEFECTO).strip(),
+            precios=_precios_por_modelo(valores.get("OPENAI_PRECIOS_POR_MODELO")),
         )
 
     @property
     def modelo(self) -> str:
         return self._modelo
+
+    @property
+    def modelos(self) -> tuple[str, ...]:
+        return (self._modelo, *(m for m in MODELOS if m != self._modelo))
+
+    def con_modelo(self, modelo: str) -> "EstrategiaOpenAI":
+        if modelo == self._modelo:
+            return self
+        if modelo not in self.modelos:
+            raise TranscripcionNoDisponible(f"OpenAI no tiene el modelo {modelo!r} en el panel.")
+        # El formato forzado por configuración es solo para el modelo configurado.
+        return EstrategiaOpenAI(
+            clave=self._clave,
+            modelo=modelo,
+            precio_minuto=self._precios.get(modelo),
+            url=self._url,
+            sesion=self._sesion,
+            precios=self._precios,
+        )
 
     @property
     def capacidades(self) -> Capacidades:

@@ -56,7 +56,8 @@ def estrategia(request):
     if request.param == "falsa":
         yield EstrategiaFalsa()
         return
-    with responses.RequestsMock() as simulado:
+    # No todas las pruebas del contrato llaman a la API.
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as simulado:
         simulado.post(URL, json=DIARIZADA)
         yield openai()
 
@@ -72,6 +73,17 @@ def test_contrato_de_la_estrategia(estrategia):
         assert all(s.inicio is not None for s in resultado.segmentos)
     if estrategia.capacidades.diarizacion:
         assert all(s.etiqueta for s in resultado.segmentos)
+
+
+def test_contrato_de_los_modelos(estrategia):
+    assert estrategia.modelos[0] == estrategia.modelo
+    assert len(set(estrategia.modelos)) == len(estrategia.modelos)
+    for modelo in estrategia.modelos:
+        variante = estrategia.con_modelo(modelo)
+        assert variante.modelo == modelo and variante.nombre == estrategia.nombre
+    assert estrategia.con_modelo(estrategia.modelo) is estrategia
+    with pytest.raises(TranscripcionNoDisponible):
+        estrategia.con_modelo("no-existe")
 
 
 def test_contrato_con_un_canal_de_hablante_conocido(estrategia):
@@ -178,6 +190,38 @@ def test_openai_rechaza_un_audio_de_mas_de_25_mb():
         openai().transcribir(grande, OPCIONES)
 
 
+def test_openai_ofrece_todos_sus_modelos_y_cada_uno_con_su_formato():
+    configurada = openai(modelo="gpt-4o-mini-transcribe", precio_minuto=Decimal("0.003"))
+    assert configurada.modelos[0] == "gpt-4o-mini-transcribe"
+    assert set(configurada.modelos) == set(modulo_openai.MODELOS)
+    assert not configurada.capacidades.marcas_de_tiempo
+
+    diarizado = configurada.con_modelo("gpt-4o-transcribe-diarize")
+    assert diarizado.capacidades.diarizacion
+    assert diarizado.costo_estimado(60) is None  # su precio no está configurado
+    assert configurada.con_modelo("whisper-1").capacidades.marcas_de_tiempo
+    assert diarizado.con_modelo("gpt-4o-mini-transcribe").costo_estimado(60) == Decimal("0.0030")
+
+    # Un modelo nuevo configurado también se ofrece, con su formato forzado.
+    nuevo = openai(modelo="gpt-5-transcribe", formato="diarized_json")
+    assert nuevo.modelos[0] == "gpt-5-transcribe" and nuevo.capacidades.diarizacion
+    assert not nuevo.con_modelo("gpt-4o-transcribe").capacidades.diarizacion
+
+
+@responses.activate
+def test_openai_con_otro_modelo_pide_ese_modelo():
+    responses.post(
+        URL,
+        json={"text": "Hola.", "duration": 90.0, "segments": [{"start": 0, "end": 1, "text": "Hola."}]},
+    )
+    resultado = openai().con_modelo("whisper-1").transcribir(AUDIO, OPCIONES)
+    cuerpo = responses.calls[0].request.body
+    for esperado in (b"whisper-1", b"verbose_json", b'name="prompt"'):
+        assert esperado in cuerpo
+    assert b"diarize" not in cuerpo
+    assert resultado.modelo == "whisper-1"
+
+
 def test_openai_sin_precio_no_inventa_costo():
     assert openai().costo_estimado(60) is None
 
@@ -192,6 +236,17 @@ def test_openai_desde_la_configuracion():
     )
     assert estrategia.modelo == "whisper-1"
     assert estrategia.costo_estimado(120) == Decimal("0.0120")
+    con_precios = registro.crear(
+        "openai",
+        {"OPENAI_API_KEY": "sk", "OPENAI_PRECIO_MINUTO": "0.006",
+         "OPENAI_PRECIOS_POR_MODELO": "gpt-4o-mini-transcribe=0,003; whisper-1 = 0.006 ;"},
+    )
+    assert con_precios.costo_estimado(60) == Decimal("0.0060")
+    assert con_precios.con_modelo("gpt-4o-mini-transcribe").costo_estimado(60) == Decimal("0.0030")
+    assert con_precios.con_modelo("gpt-transcribe").costo_estimado(60) is None
+    for malo in ("whisper-1", "whisper-1=caro"):
+        with pytest.raises(TranscripcionNoDisponible, match="OPENAI_PRECIOS_POR_MODELO"):
+            registro.crear("openai", {"OPENAI_API_KEY": "sk", "OPENAI_PRECIOS_POR_MODELO": malo})
     with pytest.raises(TranscripcionNoDisponible):
         registro.crear("openai", {"OPENAI_API_KEY": "sk", "OPENAI_PRECIO_MINUTO": "caro"})
     with pytest.raises(TranscripcionNoDisponible):

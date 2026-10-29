@@ -99,9 +99,10 @@ a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 | `TRANSCRIPCION_RETENCION_DIAS` | Días que se guarda una transcripción, desde la fecha de la llamada. Por defecto `1095` (3 años) |
 | `CLOUDTALK_CANAL_AGENTE` | En una grabación estéreo, qué canal es el del agente: `izquierdo` (por defecto) o `derecho` |
 | `OPENAI_API_KEY` | Clave de la API de OpenAI |
-| `OPENAI_MODELO_TRANSCRIPCION` | Por defecto `gpt-4o-transcribe-diarize` |
+| `OPENAI_MODELO_TRANSCRIPCION` | El modelo por defecto: `gpt-4o-transcribe-diarize` si no se indica. Al transcribir se puede elegir otro |
 | `OPENAI_FORMATO_RESPUESTA` | Solo para un modelo que el código no conoce: `diarized_json`, `verbose_json` o `json` |
-| `OPENAI_PRECIO_MINUTO` | Precio por minuto de audio en USD, para el costo estimado. Sin valor, el panel no muestra costos |
+| `OPENAI_PRECIO_MINUTO` | Precio por minuto de audio en USD del modelo por defecto, para el costo estimado. Sin valor, el panel no muestra costos |
+| `OPENAI_PRECIOS_POR_MODELO` | Precios de los otros modelos, separados por `;`: `gpt-4o-mini-transcribe=0.003; whisper-1=0.006`. Un modelo sin precio se puede usar, pero sin costo estimado |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -330,7 +331,16 @@ a lado.
 defecto es `gpt-4o-transcribe-diarize`, el único que hoy separa hablantes;
 OpenAI anunció su apagado para el 26/02/2027, así que antes de esa fecha hay que
 cambiar `OPENAI_MODELO_TRANSCRIPCION` (y `OPENAI_FORMATO_RESPUESTA` si el modelo
-nuevo no es uno que el código conozca). Para sumar otro proveedor: una clase con
+nuevo no es uno que el código conozca).
+
+**Elegir el modelo.** Al transcribir una llamada o un lote se eligen el
+proveedor y el modelo; cada modelo dice qué devuelve (separa hablantes, solo
+tiempos o solo texto) y su costo estimado. La lista completa, con precios, está
+en la página *Transcripción*. Si se deja el configurado, un fallo pasa al
+proveedor de respaldo; con un modelo elegido a mano, no. La cola guarda el
+modelo de cada pedido, y cada versión guardada dice con qué modelo se hizo.
+
+Para sumar otro proveedor: una clase con
 `@registrar`, sus variables de entorno, y su caso en las pruebas de contrato de
 `tests/test_transcripcion_estrategias.py`.
 

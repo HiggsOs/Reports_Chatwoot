@@ -81,6 +81,17 @@ class EstrategiaTranscripcion(Protocol):
     def modelo(self) -> str: ...
 
     @property
+    def modelos(self) -> tuple[str, ...]:
+        """Los modelos que se pueden elegir, empezando por el configurado."""
+        ...
+
+    def con_modelo(self, modelo: str) -> "EstrategiaTranscripcion":
+        """La misma estrategia con otro de sus `modelos`, con las capacidades y
+        el precio de ese modelo. Lanza TranscripcionNoDisponible si no es uno de
+        ellos."""
+        ...
+
+    @property
     def capacidades(self) -> Capacidades: ...
 
     def transcribir(

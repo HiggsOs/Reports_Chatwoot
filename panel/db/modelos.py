@@ -361,6 +361,7 @@ class TrabajoTranscripcion(MarcasDeTiempo, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     llamada_id: Mapped[int] = mapped_column(ForeignKey("llamadas.id", ondelete="CASCADE"))
     proveedor: Mapped[str | None] = mapped_column(String(50))  # vacío: el de siempre
+    modelo: Mapped[str | None] = mapped_column(String(100))  # vacío: el configurado
     estado: Mapped[str] = mapped_column(
         String(20), default=TRABAJO_PENDIENTE, server_default=TRABAJO_PENDIENTE
     )

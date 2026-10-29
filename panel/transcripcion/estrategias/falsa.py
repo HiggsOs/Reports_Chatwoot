@@ -14,6 +14,7 @@ from panel.transcripcion.base import (
     Segmento,
     Transcripcion,
     TranscripcionError,
+    TranscripcionNoDisponible,
 )
 from panel.transcripcion.registro import registrar
 
@@ -31,6 +32,8 @@ class EstrategiaFalsa:
         marcas_de_tiempo: bool = True,
         tamano_max_bytes: int | None = None,
         error: str | None = None,
+        modelo: str = "texto-fijo",
+        otros_modelos: tuple[str, ...] = (),
     ) -> None:
         self._capacidades = Capacidades(
             diarizacion=diarizacion,
@@ -38,6 +41,8 @@ class EstrategiaFalsa:
             tamano_max_bytes=tamano_max_bytes,
         )
         self._error = error
+        self._modelo = modelo
+        self._otros = tuple(m for m in otros_modelos if m != modelo)
         self.recibidos: list[AudioPreparado] = []
 
     @classmethod
@@ -46,7 +51,27 @@ class EstrategiaFalsa:
 
     @property
     def modelo(self) -> str:
-        return "texto-fijo"
+        return self._modelo
+
+    @property
+    def modelos(self) -> tuple[str, ...]:
+        return (self._modelo, *self._otros)
+
+    def con_modelo(self, modelo: str) -> "EstrategiaFalsa":
+        if modelo == self._modelo:
+            return self
+        if modelo not in self._otros:
+            raise TranscripcionNoDisponible(f"La estrategia falsa no tiene el modelo {modelo!r}.")
+        otra = EstrategiaFalsa(
+            self._capacidades.diarizacion,
+            self._capacidades.marcas_de_tiempo,
+            self._capacidades.tamano_max_bytes,
+            self._error,
+            modelo,
+            self.modelos,
+        )
+        otra.recibidos = self.recibidos  # para ver en las pruebas qué se pidió
+        return otra
 
     @property
     def capacidades(self) -> Capacidades:

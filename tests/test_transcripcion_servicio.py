@@ -222,6 +222,81 @@ def test_costo_de_un_lote(fabrica, almacen):
     assert (minutos, costo) == (3.0, Decimal("0"))
 
 
+def con_modelos(**extra):
+    return {"falsa": EstrategiaFalsa(modelo="rapido", otros_modelos=("preciso",), **extra)}
+
+
+def modelos_guardados(fabrica, llamada_id):
+    with unidad_de_trabajo(fabrica) as sesion:
+        return [
+            t.modelo
+            for t in sesion.scalars(
+                select(TranscripcionGuardada)
+                .where(TranscripcionGuardada.llamada_id == llamada_id)
+                .order_by(TranscripcionGuardada.id)
+            )
+        ]
+
+
+def test_se_puede_elegir_el_modelo(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    transcripcion = servicio(fabrica, almacen, estrategias=con_modelos())
+
+    assert transcripcion.transcribir(llamada_id).error is None
+    assert transcripcion.transcribir(llamada_id, modelo="preciso").error is None
+    assert transcripcion.transcribir(llamada_id, "falsa", "rapido").error is None
+    assert modelos_guardados(fabrica, llamada_id) == ["rapido", "preciso", "rapido"]
+    assert transcripcion.estrategia(modelo="preciso") is transcripcion.estrategia("falsa", "preciso")
+
+
+def test_un_modelo_que_no_existe_no_descarga_el_audio(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    transcripcion = servicio(fabrica, almacen, estrategias=con_modelos())
+
+    resultado = transcripcion.transcribir(llamada_id, modelo="no-existe")
+
+    assert "no-existe" in resultado.error
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert sesion.get(Llamada, llamada_id).audio_estado is None
+
+
+def test_con_un_modelo_elegido_no_se_usa_el_respaldo(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    estrategias = {**con_modelos(error="caído"), "otra": EstrategiaFalsa()}
+    transcripcion = servicio(fabrica, almacen, estrategias=estrategias)
+
+    assert transcripcion.transcribir(llamada_id, modelo="preciso").error
+    assert transcripcion.transcribir(llamada_id).proveedor == "otra"
+
+
+def test_la_cola_guarda_el_modelo_elegido(fabrica, almacen):
+    una, otra = guardar_llamada(fabrica, "1"), guardar_llamada(fabrica, "2")
+    transcripcion = servicio(fabrica, almacen, estrategias=con_modelos())
+    transcripcion.encolar([una], "falsa", "preciso")
+    transcripcion.encolar([otra])
+
+    assert transcripcion.procesar_cola(5).hechos == 2
+    assert modelos_guardados(fabrica, una) == ["preciso"]
+    assert modelos_guardados(fabrica, otra) == ["rapido"]
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert sorted(t.modelo or "" for t in sesion.scalars(select(TrabajoTranscripcion))) == ["", "preciso"]
+
+
+def test_el_costo_de_un_lote_usa_el_precio_del_modelo(fabrica, almacen):
+    from panel.transcripcion.estrategias.openai import EstrategiaOpenAI
+
+    ids = [guardar_llamada(fabrica, str(i)) for i in range(2)]  # 60 s cada una
+    openai = EstrategiaOpenAI(
+        clave="sk", precio_minuto=Decimal("0.006"), precios={"gpt-4o-mini-transcribe": Decimal("0.003")}
+    )
+    transcripcion = servicio(fabrica, almacen, estrategias={"openai": openai})
+
+    assert transcripcion.costo_de_lote(ids) == (2.0, Decimal("0.0120"))
+    assert transcripcion.costo_de_lote(ids, modelo="gpt-4o-mini-transcribe") == (2.0, Decimal("0.0060"))
+    assert transcripcion.costo_de_lote(ids, modelo="whisper-1")[1] is None
+    assert transcripcion.costo_de_lote(ids, modelo="no-existe")[1] is None
+
+
 def test_las_transcripciones_se_borran_a_los_tres_años(fabrica, almacen):
     reciente = guardar_llamada(fabrica, "1", dias_atras=1094)
     vieja = guardar_llamada(fabrica, "2", dias_atras=1096)
