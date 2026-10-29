@@ -45,7 +45,7 @@ no permite:
 - Puntuar de forma automática con IA, enviar reportes por correo, o que los
   asesores entren a ver su propia nota.
 
- La arquitectura no impide agregar nada de esto después.
+La arquitectura no impide agregar nada de esto después.
 
 ## 3. Decisiones tomadas
 
