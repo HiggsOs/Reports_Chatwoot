@@ -55,6 +55,7 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 | País por defecto de los teléfonos | España (`+34`) | La mayoría de las llamadas son en España |
 | Normalización de teléfonos | Librería `phonenumbers`, formato E.164 | Evita reglas a mano por país |
 | Audio | Mixto: bajo demanda; se guarda en MP3 lo que se escucha | Poco espacio y la evidencia de cada auditoría queda guardada |
+| Retención de audios | 3 meses desde la fecha de la llamada | La transcripción y la auditoría quedan para siempre en la base |
 | Almacén de audio | FTP del hosting contratado, con FTPS si está disponible | Ya está pago por un año |
 | Rutas de audio | Relativas al directorio del FTP | Permite cambiar de servidor sin tocar la base |
 | Transcripción | Propia, con el patrón **Strategy**: una estrategia por proveedor | Ninguna llamada trae transcripción; se puede cambiar o comparar proveedores sin tocar el resto del código |
@@ -323,6 +324,25 @@ Flujo `obtener_audio(llamada) -> bytes`:
 Ruta en el FTP: `{plataforma}/{año}/{mes}/{id_externo}.mp3`, guardada en la
 base relativa a `FTP_DIR`.
 
+**Retención: 3 meses** (`AUDIO_RETENCION_DIAS=90`), contados desde la fecha
+de la llamada. Una vez al día, `sync` borra del FTP los MP3 vencidos y marca
+la llamada como `audio_estado = eliminado_por_retencion`. Lo que se conserva
+en la base después de ese plazo:
+
+- La transcripción, las auditorías con sus puntajes y comentarios, y los
+  datos de la llamada: el reporte histórico no pierde nada.
+- No se borra un audio con una auditoría en `borrador`; se borra cuando la
+  auditoría se cierra, si ya pasó el plazo.
+
+Si alguien abre una llamada vencida, el panel intenta traer el audio otra vez
+desde la plataforma por si aún la conserva; si responde `404` o `410`, avisa
+que el audio ya no está disponible y muestra solo la transcripción. Ese
+audio traído de nuevo no se vuelve a guardar en el FTP.
+
+El borrado se prueba con fechas fijas: el día 90 se conserva, el 91 se borra.
+Antes de borrar, `sync` registra en el log cuántos archivos y cuántos MB va a
+liberar.
+
 `enlace_plataforma` (`Cdr.recording_link` en CloudTalk) se guarda para el
 botón «Abrir en CloudTalk». Solo se pide audio a CloudTalk cuando ese enlace
 existe, para no gastar peticiones en llamadas sin grabación.
@@ -466,6 +486,7 @@ tabla `usuarios`. El usuario actual de las variables de entorno se crea como
 | `TELEFONO_REGION` | `ES` |
 | `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al FTP |
 | `FTP_TLS` | `true` para FTPS |
+| `AUDIO_RETENCION_DIAS` | `90` |
 | `SYNC_INTERVALO_MINUTOS` | Frecuencia de la sincronización |
 | `TRANSCRIPCION_PROVEEDOR` | Estrategia por defecto: `openai`, `alibaba`, `falsa`… |
 | `TRANSCRIPCION_RESPALDO` | Estrategias a probar si falla la principal, separadas por coma |
@@ -498,7 +519,7 @@ rol del usuario.
 | **Llamadas** | auditor, supervisor | Lista filtrable (fecha, persona, cuenta, dirección, duración, con transcripción, auditada o no). Al abrir una llamada: reproductor, transcripción, persona asignada (editable), botón «Transcribir» (con el proveedor por defecto o uno elegido) y botón «Auditar». Desde la lista se eligen varias llamadas y se transcriben en lote, viendo antes el costo estimado |
 | **Historial del cliente** | auditor, supervisor | Buscar por número. Línea de tiempo con chats y llamadas por fecha, con quién atendió cada uno. Se abre cada elemento y se audita desde ahí |
 | **Auditar** | auditor | Audio y transcripción (o mensajes del chat) a la izquierda; ficha con los criterios, puntajes y comentarios a la derecha. Guardar borrador o cerrar. Muestra la nota en vivo |
-| **Auditorías** | auditor, supervisor | Lista de auditorías con filtros; abrir una muestra el detalle y el audio guardado |
+| **Auditorías** | auditor, supervisor | Lista de auditorías con filtros; abrir una muestra el detalle y el audio guardado (o, pasados los 3 meses, el aviso de que ya no está y la transcripción) |
 | **Reportes** | auditor, supervisor | Elegir período, área y persona; ver la tabla y un gráfico de evolución; descargar Excel o CSV |
 | **Fichas** | admin | Crear y editar fichas y criterios (nombre, peso, puntaje máximo, crítico). Editar una ficha en uso crea una versión nueva |
 | **Usuarios** | admin | Alta de usuarios del panel, rol y contraseña |
@@ -553,17 +574,18 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
 2. ¿Con qué proveedor arrancamos por defecto? Propuesta: transcribir una
    muestra de 20 llamadas reales con OpenAI y con Alibaba y decidir por
    calidad y precio.
-3. ¿Cuánto tiempo hay que conservar los audios en el FTP?
-4. ¿El FTP del hosting acepta FTPS? ¿Cuánto espacio tiene el plan?
-5. ¿Cuál es el endpoint de grabaciones de Ringover?
-6. ¿Alguna bandeja de Chatwoot también es compartida? Si es así, usa las mismas
+3. ¿El FTP del hosting acepta FTPS? ¿Cuánto espacio tiene el plan?
+4. ¿Cuál es el endpoint de grabaciones de Ringover?
+5. ¿Alguna bandeja de Chatwoot también es compartida? Si es así, usa las mismas
    estrategias de asignación.
-7. ¿Los roles propuestos (admin, auditor, supervisor) se ajustan al equipo?
-8. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
-9. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
+6. ¿Los roles propuestos (admin, auditor, supervisor) se ajustan al equipo?
+7. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
+8. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
    canales separados)? Se confirma con una grabación real; define si la
    atribución de hablantes es exacta o depende del proveedor.
-10. Protección de datos: los clientes están en España (RGPD). Enviar audio a
-    un proveedor externo necesita su acuerdo de tratamiento de datos y elegir
-    una región adecuada (en Alibaba, la internacional o la europea si existe
-    para el modelo elegido). Hay que confirmarlo antes de usar audio real.
+9. Protección de datos: los clientes están en España (RGPD). Enviar audio a
+   un proveedor externo necesita su acuerdo de tratamiento de datos y elegir
+   una región adecuada (en Alibaba, la internacional o la europea si existe
+   para el modelo elegido). Hay que confirmarlo antes de usar audio real.
+   Lo mismo vale para el plazo de 3 meses de los audios y para si las
+   transcripciones, que también son datos personales, necesitan un plazo.
