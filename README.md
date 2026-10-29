@@ -103,6 +103,8 @@ a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 | `OPENAI_FORMATO_RESPUESTA` | Solo para un modelo que el código no conoce: `diarized_json`, `verbose_json` o `json` |
 | `OPENAI_PRECIO_MINUTO` | Precio por minuto de audio en USD del modelo por defecto, para el costo estimado. Sin valor, el panel no muestra costos |
 | `OPENAI_PRECIOS_POR_MODELO` | Precios de los otros modelos, separados por `;`: `gpt-4o-mini-transcribe=0.003; whisper-1=0.006`. Un modelo sin precio se puede usar, pero sin costo estimado |
+| `OPENAI_ADMIN_KEY` | Opcional. Admin key de OpenAI (`sk-admin-…`), solo para leer lo cobrado y mostrar el precio real por minuto en la página *Transcripción*. No es la que transcribe |
+| `OPENAI_PROJECT_ID` | Opcional. Con la Admin key, lee solo lo de ese proyecto (`proj_…`), para no mezclar otras aplicaciones de la organización |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -339,6 +341,13 @@ tiempos o solo texto) y su costo estimado. La lista completa, con precios, está
 en la página *Transcripción*. Si se deja el configurado, un fallo pasa al
 proveedor de respaldo; con un modelo elegido a mano, no. La cola guarda el
 modelo de cada pedido, y cada versión guardada dice con qué modelo se hizo.
+
+**Precio real.** Ningún proveedor publica sus precios por API, así que el
+panel los toma de la configuración. Con `OPENAI_ADMIN_KEY`, la página
+*Transcripción* lee de las APIs de uso y costos de OpenAI lo cobrado y los
+minutos de cada modelo, calcula el precio por minuto real y lo compara con el
+configurado: si difieren más de un 5 %, avisa para corregirlo. Se consulta como
+mucho una vez por hora (o con *Actualizar*).
 
 Para sumar otro proveedor: una clase con
 `@registrar`, sus variables de entorno, y su caso en las pruebas de contrato de

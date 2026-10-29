@@ -1,6 +1,6 @@
 """La transcripción en el detalle de una llamada, y la página Transcripción."""
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from config import Config
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
 from panel.db.base import unidad_de_trabajo
-from panel.transcripcion import consultas
+from panel.transcripcion import consultas, facturacion
 from panel.transcripcion.registro import titulo as titulo_proveedor
 from panel.transcripcion.servicio import ServicioTranscripcion, VistaTranscripcion
 
@@ -232,7 +232,108 @@ def _modelos(transcripcion: ServicioTranscripcion) -> None:
         )
 
 
-def pagina(fabrica: sessionmaker[Session], cfg: Config, transcripcion: ServicioTranscripcion | None) -> None:
+PERIODOS = ("Últimos 30 días", "Este mes", "Mes anterior")
+
+
+def _periodo(nombre: str, hoy: date) -> tuple[datetime, datetime]:
+    """[desde, hasta) en UTC, que es como cuentan los días las APIs de facturación."""
+    manana = datetime.combine(hoy + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    inicio_mes = datetime.combine(hoy.replace(day=1), time.min, tzinfo=timezone.utc)
+    if nombre == "Este mes":
+        return inicio_mes, manana
+    if nombre == "Mes anterior":
+        anterior = (inicio_mes - timedelta(days=1)).replace(day=1)
+        return anterior, inicio_mes
+    return manana - timedelta(days=30), manana
+
+
+@st.cache_data(ttl=3600, show_spinner="Consultando lo cobrado…")
+def _cobrado(proveedor: str, desde: datetime, hasta: datetime, _fuente) -> list[facturacion.CobroModelo]:
+    # Una hora en caché: las APIs informan con horas de retraso y tienen límite.
+    return _fuente.cobrado(desde, hasta)
+
+
+def _usd(valor, decimales: int = 4) -> str:
+    return "—" if valor is None else f"{valor:.{decimales}f}"
+
+
+def _precio_real(fabrica, transcripcion: ServicioTranscripcion | None, fuentes: dict) -> None:
+    st.subheader("Precio real cobrado")
+    if not fuentes:
+        st.caption(
+            "Con OPENAI_ADMIN_KEY (una Admin key de OpenAI, distinta de la que transcribe) "
+            "aquí se ve lo que OpenAI cobró de verdad por cada modelo y el precio por "
+            "minuto que resulta, al lado del configurado."
+        )
+        return
+    izquierda, derecha = st.columns([2, 1])
+    periodo = izquierda.selectbox("Período", PERIODOS, key="facturacion-periodo")
+    derecha.write("")
+    if derecha.button("Actualizar", key="facturacion-actualizar", help="Vuelve a consultar ahora."):
+        _cobrado.clear()
+    desde, hasta = _periodo(periodo, datetime.now(timezone.utc).date())
+    with unidad_de_trabajo(fabrica) as sesion:
+        del_panel = consultas.gasto(sesion, desde, hasta)
+
+    for proveedor, fuente in fuentes.items():
+        try:
+            cobros = _cobrado(proveedor, desde, hasta, fuente)
+        except facturacion.FacturacionError as error:
+            st.error(f"{titulo_proveedor(proveedor)}: {error}")
+            continue
+        if not cobros:
+            st.caption(f"{titulo_proveedor(proveedor)} no informa transcripciones en el período.")
+            continue
+        estrategia = transcripcion.estrategias.get(proveedor) if transcripcion else None
+        minutos_panel = {g.modelo: g.minutos for g in del_panel if g.proveedor == proveedor}
+        filas = facturacion.comparar(cobros, estrategia)
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Proveedor": titulo_proveedor(proveedor),
+                        "Modelo": f.modelo,
+                        "Min. cobrados": f.minutos,
+                        "Min. en el panel": minutos_panel.get(f.modelo, 0.0),
+                        "Cobrado USD": _usd(f.cobrado, 2),
+                        "USD/min real": _usd(f.precio_real),
+                        "USD/min config.": _usd(f.precio_configurado),
+                        "Diferencia": "—" if f.diferencia is None
+                        else ("⚠️ " if f.desviado else "") + f"{f.diferencia:+.0%}",
+                    }
+                    for f in filas
+                ]
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
+        for fila in filas:
+            if fila.desviado:
+                st.warning(
+                    f"{fila.modelo}: OpenAI cobró {_usd(fila.precio_real)} USD/min y el panel "
+                    f"tiene {_usd(fila.precio_configurado)}. Conviene corregir el precio "
+                    "(OPENAI_PRECIO_MINUTO u OPENAI_PRECIOS_POR_MODELO)."
+                )
+            elif fila.precio_configurado is None and fila.precio_real is not None:
+                st.info(
+                    f"{fila.modelo} no tiene precio configurado; según lo cobrado, es "
+                    f"{_usd(fila.precio_real)} USD/min."
+                )
+    st.caption(
+        "Sale de las APIs de uso y costos de OpenAI, que informan con unas horas de "
+        "retraso y cuentan los días en UTC. Incluyen todo lo transcrito con la "
+        "organización (o con OPENAI_PROJECT_ID, si se indicó), también fuera del panel. "
+        "Una grabación estéreo se envía por canal: OpenAI cuenta el doble de minutos que "
+        "el panel."
+    )
+
+
+def pagina(
+    fabrica: sessionmaker[Session],
+    cfg: Config,
+    transcripcion: ServicioTranscripcion | None,
+    fuentes_facturacion: dict | None = None,
+) -> None:
     st.title("Transcripción")
     if transcripcion is None:
         st.warning(NO_CONFIGURADA)
@@ -303,6 +404,8 @@ def pagina(fabrica: sessionmaker[Session], cfg: Config, transcripcion: ServicioT
         )
     else:
         st.caption("Todavía no hay transcripciones este mes.")
+
+    _precio_real(fabrica, transcripcion, fuentes_facturacion or {})
 
     st.subheader("Comparar proveedores")
     if not comparables or transcripcion is None:

@@ -720,6 +720,11 @@ Decisiones de la etapa 6:
   y el precio de ese modelo; el servicio y las pantallas no conocen los modelos
   de ningún proveedor. El pedido de la cola guarda el modelo (migración 0007).
   Con un modelo elegido a mano no se usa el respaldo: se pidió ese.
+- Los precios siguen en la configuración (ningún proveedor los da por API),
+  pero se comprueban con lo cobrado: una fuente de facturación por proveedor
+  (`panel/transcripcion/facturacion.py`, para OpenAI las APIs de uso y costos
+  con una Admin key) da segundos y USD por modelo, y el panel calcula el precio
+  real. No se guarda nada en la base: se consulta y se cachea una hora.
 La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
 etapa.
 

@@ -14,7 +14,7 @@ import streamlit_authenticator as stauth
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ConfigError, cargar_config, ruta_asesores
-from panel.composicion import servicio_audio, servicio_transcripcion
+from panel.composicion import fuentes_facturacion, servicio_audio, servicio_transcripcion
 from panel.db.base import (
     comprobar_conexion,
     crear_fabrica_sesiones,
@@ -64,6 +64,11 @@ def obtener_transcripcion(database_url: str):
     return servicio_transcripcion(
         obtener_fabrica(database_url), CFG, obtener_audio(database_url)
     )
+
+
+@st.cache_resource
+def obtener_facturacion():
+    return fuentes_facturacion(CFG)
 
 
 def leer_areas() -> dict[str, str]:
@@ -158,7 +163,8 @@ navegacion = st.navigation(
                    fabrica=FABRICA, importacion=IMPORTACION),
             cuentas,
             pagina(ui_transcripcion.pagina, "Transcripción", "transcripcion", "📝",
-                   fabrica=FABRICA, cfg=CFG, transcripcion=TRANSCRIPCION),
+                   fabrica=FABRICA, cfg=CFG, transcripcion=TRANSCRIPCION,
+                   fuentes_facturacion=obtener_facturacion()),
         ],
         "Reportes en vivo": [
             pagina(ui_en_vivo.reporte_chatwoot, "Reporte de Chatwoot", "reporte-chatwoot", "📊",

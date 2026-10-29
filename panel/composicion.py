@@ -26,6 +26,7 @@ from panel.sync.tareas import (
     SubirAudiosPendientes,
     Tarea,
 )
+from panel.transcripcion import facturacion
 from panel.transcripcion import registro as registro_transcripcion
 from panel.transcripcion.base import OpcionesTranscripcion
 from panel.transcripcion.servicio import ServicioTranscripcion
@@ -88,6 +89,12 @@ def servicio_transcripcion(
         ),
         cfg.cloudtalk_canal_agente,
     )
+
+
+def fuentes_facturacion(cfg: Config) -> dict[str, facturacion.FuenteFacturacion]:
+    """Las APIs de facturación configuradas, por proveedor (para OpenAI hace
+    falta OPENAI_ADMIN_KEY)."""
+    return facturacion.disponibles(cfg.entorno)
 
 
 def sincronizadores(fabrica: sessionmaker[Session], cfg: Config) -> list[Sincronizador | Tarea]:
