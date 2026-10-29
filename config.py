@@ -1,13 +1,19 @@
 """Lectura y validación de la configuración por variables de entorno."""
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+
+from pydantic import BaseModel, ConfigDict
 
 DATA_DIR_POR_DEFECTO = "/data"
 RINGOVER_BASE_URL_POR_DEFECTO = "https://public-api.ringover.com/v2"
 CLOUDTALK_BASE_URL_POR_DEFECTO = "https://my.cloudtalk.io/api"
 CLOUDTALK_AI_BASE_URL_POR_DEFECTO = "https://api.cloudtalk.io/v1"
+
+# SQLAlchemy necesita el nombre del driver en la URL. EasyPanel y la mayoría de
+# los proveedores entregan `postgres://` o `postgresql://` sin él.
+DRIVER_POSTGRES = "postgresql+psycopg"
+_ESQUEMAS_POSTGRES = ("postgres", "postgresql")
 
 _REQUERIDAS = (
     "CHATWOOT_BASE_URL",
@@ -16,6 +22,7 @@ _REQUERIDAS = (
     "APP_USERNAME",
     "APP_PASSWORD_HASH",
     "APP_COOKIE_KEY",
+    "DATABASE_URL",
 )
 
 
@@ -23,14 +30,16 @@ class ConfigError(Exception):
     """La configuración del entorno es inválida o está incompleta."""
 
 
-@dataclass(frozen=True)
-class Config:
+class Config(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     base_url: str
     account_id: int
     api_token: str
     usuario: str
     password_hash: str
     cookie_key: str
+    database_url: str
     data_dir: Path
     # Ringover es opcional: sin token, la app funciona igual y solo se oculta
     # la pestaña de transcripciones.
@@ -45,6 +54,23 @@ class Config:
     @property
     def cloudtalk_configurado(self) -> bool:
         return bool(self.cloudtalk_key_id and self.cloudtalk_key_secret)
+
+
+def normalizar_url_bd(bruta: str) -> str:
+    """Devuelve la URL de Postgres con el driver que usa SQLAlchemy."""
+    url = bruta.strip()
+    esquema, separador, resto = url.partition("://")
+    if not separador:
+        raise ConfigError(
+            "DATABASE_URL debe tener la forma postgresql://usuario:clave@host:5432/base"
+        )
+    if esquema in _ESQUEMAS_POSTGRES:
+        return f"{DRIVER_POSTGRES}://{resto}"
+    if esquema.startswith("postgresql+"):
+        return url
+    raise ConfigError(
+        f"DATABASE_URL debe apuntar a PostgreSQL, se recibió el esquema {esquema!r}."
+    )
 
 
 def cargar_config(entorno: Mapping[str, str]) -> Config:
@@ -73,6 +99,7 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
         usuario=entorno["APP_USERNAME"].strip(),
         password_hash=entorno["APP_PASSWORD_HASH"].strip(),
         cookie_key=entorno["APP_COOKIE_KEY"].strip(),
+        database_url=normalizar_url_bd(entorno["DATABASE_URL"]),
         data_dir=Path(data_dir),
         ringover_token=entorno.get("RINGOVER_API_TOKEN", "").strip(),
         ringover_base_url=(
@@ -90,6 +117,8 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
 
 
 def ruta_asesores(cfg: Config) -> Path:
+    """El archivo de asesores anterior a la base de datos; solo se lee una vez
+    para importarlo."""
     return cfg.data_dir / "asesores.csv"
 
 

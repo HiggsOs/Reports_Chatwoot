@@ -1,12 +1,15 @@
 """Interfaz web de los reportes de Chatwoot y de transcripciones de Ringover y
 CloudTalk."""
 
+import logging
 import os
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 import streamlit_authenticator as stauth
+from sqlalchemy.exc import SQLAlchemyError
 
 from chatwoot import CacheMensajes, ChatwootError, ClienteChatwoot
 from config import ConfigError, cargar_config, ruta_asesores, ruta_cache
@@ -14,18 +17,27 @@ from reporte import (
     AREAS_VALIDAS,
     SIN_MAPEAR,
     TZ,
-    cargar_asesores,
     escribir_csv,
     generar_filas,
-    guardar_asesores,
     nombre_archivo,
 )
 import reporte_cloudtalk
 import reporte_ringover
 from cloudtalk import ClienteCloudTalk, CloudTalkError
 from ringover import ClienteRingover, RingoverError
+from panel.db.base import (
+    comprobar_conexion,
+    crear_fabrica_sesiones,
+    crear_motor,
+    unidad_de_trabajo,
+)
+from panel.db.repositorios.personas import RepositorioPersonas
+from panel.esquemas.personas import AsesorArea
+from panel.importar_asesores import importar_asesores_csv
 
 DIAS_RANGO_AMPLIO = 90
+
+registro = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Reportes", page_icon="📊")
 
@@ -33,6 +45,22 @@ st.set_page_config(page_title="Reportes", page_icon="📊")
 @st.cache_resource
 def obtener_config():
     return cargar_config(os.environ)
+
+
+@st.cache_resource
+def obtener_fabrica(database_url: str):
+    return crear_fabrica_sesiones(crear_motor(database_url))
+
+
+@st.cache_resource(show_spinner="Importando asesores a la base de datos…")
+def importar_asesores_una_vez(database_url: str, ruta: str):
+    """Copia `asesores.csv` a la base la primera vez que arranca la app."""
+    return importar_asesores_csv(Path(ruta), obtener_fabrica(database_url))
+
+
+def leer_areas() -> dict[str, str]:
+    with unidad_de_trabajo(obtener_fabrica(CFG.database_url)) as sesion:
+        return RepositorioPersonas(sesion).mapa_areas()
 
 
 @st.cache_data(ttl=3600, show_spinner="Cargando agentes, grupos y números de CloudTalk…")
@@ -53,6 +81,22 @@ try:
     CFG = obtener_config()
 except ConfigError as error:
     st.error(f"La aplicación no está bien configurada.\n\n{error}")
+    st.stop()
+
+try:
+    # En cada carga: el motor queda en caché, pero la base puede haberse caído
+    # después de arrancar.
+    comprobar_conexion(obtener_fabrica(CFG.database_url))
+    IMPORTACION = importar_asesores_una_vez(
+        CFG.database_url, str(ruta_asesores(CFG))
+    )
+except SQLAlchemyError:
+    # Esto se ve antes del login: el detalle (servidor, usuario) va solo al log.
+    registro.exception("No se pudo conectar con la base de datos.")
+    st.error(
+        "No se pudo conectar con la base de datos. Revise DATABASE_URL y que "
+        "PostgreSQL esté en marcha; el detalle está en el log del servicio."
+    )
     st.stop()
 
 autenticador = stauth.Authenticate(
@@ -105,7 +149,7 @@ with pestana_reporte:
 
     if st.button("Generar reporte", type="primary", disabled=desde > hasta):
         cliente = ClienteChatwoot(CFG.base_url, CFG.account_id, CFG.api_token)
-        mapeo = cargar_asesores(ruta_asesores(CFG))
+        mapeo = leer_areas()
         barra = st.progress(0.0, text="Consultando conversaciones…")
 
         def avanzar(hechas: int, total: int) -> None:
@@ -407,7 +451,14 @@ with pestana_asesores:
         "aparecen como SIN_MAPEAR en el reporte."
     )
 
-    actual = cargar_asesores(ruta_asesores(CFG))
+    if IMPORTACION is not None and IMPORTACION.descartados:
+        st.warning(
+            "Al pasar asesores.csv a la base de datos se descartaron estas filas "
+            "por no tener un área válida. Cárguelas de nuevo en esta tabla: "
+            + ", ".join(IMPORTACION.descartados)
+        )
+
+    actual = leer_areas()
     tabla = pd.DataFrame(
         sorted(actual.items()) or [], columns=["email_asesor", "area"]
     )
@@ -441,12 +492,11 @@ with pestana_asesores:
     confirmado = True
     if borraria_todo:
         st.warning(
-            f"La tabla quedó vacía. Si guarda, se borrará el mapeo completo de "
-            f"{len(actual)} asesores y todos aparecerán como SIN_MAPEAR en el "
-            "próximo reporte."
+            f"La tabla quedó vacía. Si guarda, se quitarán los {len(actual)} "
+            "asesores y todos aparecerán como SIN_MAPEAR en el próximo reporte."
         )
         confirmado = st.checkbox(
-            "Confirmo que quiero borrar todos los asesores.",
+            "Confirmo que quiero quitar todos los asesores.",
             key="confirmar_borrado_asesores",
         )
 
@@ -461,5 +511,15 @@ with pestana_asesores:
         elif invalidas:
             st.error(f"El área debe ser {' o '.join(AREAS_VALIDAS)}.")
         else:
-            guardar_asesores(ruta_asesores(CFG), dict(limpias))
-            st.success(f"Se guardaron {len(limpias)} asesores.")
+            asesores = [AsesorArea(correo=correo, area=area) for correo, area in limpias]
+            with unidad_de_trabajo(obtener_fabrica(CFG.database_url)) as sesion:
+                resumen = RepositorioPersonas(sesion).sincronizar_areas(asesores)
+            if resumen.hubo_cambios:
+                st.success(
+                    f"Se guardaron {len(asesores)} asesores: {resumen.creadas} "
+                    f"nuevos, {resumen.actualizadas} con otra área, "
+                    f"{resumen.reactivadas} reactivados y {resumen.desactivadas} "
+                    "quitados."
+                )
+            else:
+                st.info("No había cambios que guardar.")

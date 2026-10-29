@@ -51,7 +51,7 @@ proveedor. Así:
   nombre → clase, que se llena con un decorador
   (`@registrar("openai")`). Agregar una implementación es escribir el archivo
   y decorar la clase; no hay un `if/elif` central que editar.
-- Un único módulo, la **raíz de composición** (`app/composicion.py`), lee la
+- Un único módulo, la **raíz de composición** (`panel/composicion.py`), lee la
   configuración y arma las piezas concretas: qué estrategia de transcripción,
   qué almacén de audio, qué respaldo. Es el **único** lugar del sistema que
   conoce clases concretas; el resto recibe interfaces ya armadas
@@ -334,7 +334,7 @@ leer. Estas partes quedan como funciones simples hasta que aparezca una
 segunda forma real de hacerlas:
 
 - Normalización de teléfonos: una función con `phonenumbers` y región `ES`.
-- Configuración: un modelo de `pydantic-settings`.
+- Configuración: un modelo Pydantic (`config.py`).
 - Conversión de horas a `Europe/Madrid`: una función en el contexto de
   asignación.
 - Conversión WAV → MP3: una función que llama a `ffmpeg`.

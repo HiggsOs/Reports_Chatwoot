@@ -60,7 +60,7 @@ La arquitectura no impide agregar nada de esto después.
 | Usuarios del panel | Un solo administrador (el login actual) | No se necesitan roles por ahora |
 | ORM | SQLAlchemy 2.x (estilo tipado `Mapped[...]`) | Estándar en Python; separa el modelo de la consulta |
 | Migraciones | Alembic | Acompaña a SQLAlchemy; el esquema evoluciona sin perder datos |
-| Validación y tipos | Pydantic v2 | Esquemas de entrada y salida, y configuración por variables de entorno (`pydantic-settings`) |
+| Validación y tipos | Pydantic v2 | Esquemas de entrada y salida, y la configuración (`Config` es un modelo Pydantic inmutable que se arma desde las variables de entorno) |
 | Interfaz | Streamlit (se mantiene) | Se reutiliza lo existente; alcanza para un equipo interno |
 | CSV | Solo como **descarga**; nada se guarda en CSV | `asesores.csv` se migra a la base una vez y deja de usarse |
 | Zona horaria de las franjas | `Europe/Madrid` | Los turnos se definen en hora de España |
@@ -114,8 +114,7 @@ después (por ejemplo a FastAPI + React) sin reescribir el backend.
 ### 5.1 Estructura de carpetas
 
 ```
-app/
-  config.py            # Settings de pydantic-settings
+panel/                 # se llama panel/ y no app/ para no chocar con app.py
   composicion.py       # raíz de composición: arma las piezas concretas
   db/
     base.py            # engine, SessionLocal, Base
@@ -584,7 +583,7 @@ Las variables actuales se mantienen.
 
 ### 5.11 Dependencias nuevas
 
-`sqlalchemy`, `alembic`, `psycopg[binary]`, `pydantic`, `pydantic-settings`,
+`sqlalchemy`, `alembic`, `psycopg[binary]`, `pydantic`,
 `phonenumbers`, `openpyxl`, `paramiko`, `openai` y el SDK de Alibaba (`dashscope`) o
 llamadas HTTP directas con `requests`. En el `Dockerfile`: el paquete del sistema
 `ffmpeg`. Para las pruebas de base de datos: `testcontainers[postgres]` o un
@@ -628,7 +627,7 @@ Criterios comunes a todas las páginas:
 
 | # | Etapa | Backend | Frontend | Resultado visible |
 |---|---|---|---|---|
-| 1 | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, modelos, servicio Postgres, migración de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
+| 1 ✅ | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, tabla `personas`, importación de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
 | 2 | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
 | 3 | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
@@ -638,6 +637,10 @@ Criterios comunes a todas las páginas:
 | 8 | Reportes | Reportes y Excel | Reportes | Se descarga el reporte de auditorías |
 
 Cada etapa se entrega con pruebas y se puede desplegar por separado.
+
+Cada etapa crea solo las tablas que usa, con su propia migración de Alembic.
+La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
+etapa.
 
 ## 8. Pruebas
 

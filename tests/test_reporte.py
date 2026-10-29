@@ -11,7 +11,6 @@ from reporte import (
     detectar_direccion,
     escribir_csv,
     generar_filas,
-    guardar_asesores,
     nombre_archivo,
     resolver_area,
     traducir_estado,
@@ -32,20 +31,6 @@ def test_carga_normaliza_correos_y_espacios(tmp_path: Path):
         "ana@empresa.com": "Comercial",
         "luis@empresa.com": "RDC",
     }
-
-
-def test_ida_y_vuelta_de_guardado(tmp_path: Path):
-    archivo = tmp_path / "sub" / "asesores.csv"
-    mapeo = {"ana@empresa.com": "Comercial", "luis@empresa.com": "RDC"}
-    guardar_asesores(archivo, mapeo)
-    assert cargar_asesores(archivo) == mapeo
-
-
-def test_guardar_ordena_por_correo(tmp_path: Path):
-    archivo = tmp_path / "asesores.csv"
-    guardar_asesores(archivo, {"zoe@e.com": "RDC", "ana@e.com": "Comercial"})
-    lineas = archivo.read_text(encoding="utf-8").splitlines()
-    assert lineas[1].startswith("ana@e.com")
 
 
 def test_resolver_area_encuentra_al_asesor():

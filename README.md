@@ -24,8 +24,10 @@ Se entra con usuario y contraseña. Hay cuatro pestañas:
   pide datos si está configurado `RINGOVER_API_TOKEN`.
 - **CloudTalk**: mismo flujo, contra la API de CloudTalk. Solo pide datos si
   están configurados `CLOUDTALK_API_KEY_ID` y `CLOUDTALK_API_KEY_SECRET`.
-- **Asesores**: mantener la lista de correo → área. Un asesor que no esté en la
-  lista aparece como `SIN_MAPEAR` en el reporte.
+- **Asesores**: mantener la lista de correo → área, guardada en PostgreSQL. Un
+  asesor que no esté en la lista aparece como `SIN_MAPEAR` en el reporte.
+  Quitar un asesor de la lista no lo borra de la base: lo desactiva, y si se
+  vuelve a agregar se reactiva.
 
 ## Variables de entorno
 
@@ -37,6 +39,7 @@ Se entra con usuario y contraseña. Hay cuatro pestañas:
 | `APP_USERNAME` | Usuario del login |
 | `APP_PASSWORD_HASH` | Hash bcrypt de la contraseña |
 | `APP_COOKIE_KEY` | Cadena aleatoria para firmar la cookie de sesión |
+| `DATABASE_URL` | Conexión a PostgreSQL, por ejemplo `postgres://usuario:clave@host:5432/base`. Se aceptan `postgres://`, `postgresql://` y `postgresql+psycopg://` |
 | `RINGOVER_API_TOKEN` | Token público de Ringover, con el permiso `Calls Read`. Opcional: sin él, la pestaña de transcripciones queda inactiva |
 | `RINGOVER_BASE_URL` | Por defecto `https://public-api.ringover.com/v2`; usar el servidor de EE. UU. si la cuenta está allá |
 | `CLOUDTALK_API_KEY_ID` | Id de la clave de API de CloudTalk (Dashboard → Account → Settings → API Keys). Opcional |
@@ -52,20 +55,62 @@ python generar_hash.py 'la-contraseña-elegida'
 
 ## Despliegue en EasyPanel
 
-1. Crear un servicio de tipo App apuntando a este repositorio (usa el
+1. Crear un servicio de tipo **Postgres** en el mismo proyecto y copiar su
+   URL de conexión interna.
+2. Crear un servicio de tipo App apuntando a este repositorio (usa el
    `Dockerfile`).
-2. **Montar un volumen persistente en `/data`.** Sin esto se pierden el mapeo de
-   asesores y la caché en cada despliegue.
-3. Cargar las variables de entorno de la tabla anterior.
-4. Asignar el dominio. EasyPanel gestiona el HTTPS.
+3. **Montar un volumen persistente en `/data`.** Sin esto se pierde la caché en
+   cada despliegue.
+4. Cargar las variables de entorno de la tabla anterior, con `DATABASE_URL`
+   apuntando al servicio Postgres.
+5. Asignar el dominio. EasyPanel gestiona el HTTPS.
+
+Al arrancar, el contenedor aplica las migraciones pendientes
+(`alembic upgrade head`) antes de levantar la app. Si la base no responde, el
+contenedor no arranca.
+
+### Paso de `asesores.csv` a la base de datos
+
+La primera vez que la app arranca con la base vacía, copia
+`DATA_DIR/asesores.csv` a la tabla `personas` y renombra el archivo a
+`asesores.csv.migrado`, que queda como respaldo y ya no se lee. Las filas con un
+área que no sea `Comercial` ni `RDC` no se importan; la pestaña **Asesores**
+las muestra en un aviso para cargarlas a mano. Si la base ya tenía asesores, el
+archivo no se importa (la base manda), pero se renombra igual.
 
 ## Desarrollo
 
 ```bash
 pip install -r requirements.txt
-python -m pytest
+```
+
+```bash
+alembic upgrade head
+```
+
+```bash
 streamlit run app.py
 ```
+
+`alembic upgrade head` y la app leen `DATABASE_URL`. Las pruebas de base de
+datos corren contra un PostgreSQL real indicado en `TEST_DATABASE_URL`, y se
+saltan si no está definida. **Esa base se vacía en cada corrida**, así que su
+nombre tiene que contener `test`:
+
+```bash
+TEST_DATABASE_URL=postgresql://usuario:clave@localhost:5432/panel_test python -m pytest
+```
+
+Para cambiar el esquema: editar `panel/db/modelos.py`, generar la migración y
+revisarla antes de confirmarla. Una migración ya aplicada no se edita: se
+escribe otra.
+
+```bash
+alembic revision --autogenerate -m "descripcion del cambio"
+```
+
+La prueba `test_los_modelos_coinciden_con_las_migraciones` falla si un modelo
+cambió sin su migración.
 
 ## Nota sobre la fecha de cierre
 
