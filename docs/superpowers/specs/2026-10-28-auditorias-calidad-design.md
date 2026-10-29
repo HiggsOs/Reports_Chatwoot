@@ -56,7 +56,8 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 | Normalización de teléfonos | Librería `phonenumbers`, formato E.164 | Evita reglas a mano por país |
 | Audio | Mixto: bajo demanda; se guarda en MP3 lo que se escucha | Poco espacio y la evidencia de cada auditoría queda guardada |
 | Retención de audios | 3 meses desde la fecha de la llamada | La transcripción y la auditoría quedan para siempre en la base |
-| Almacén de audio | FTP del hosting contratado, con FTPS si está disponible | Ya está pago por un año |
+| Almacén de audio | Hosting contratado (Plesk) por **SFTP** en el puerto 8023; FTPS como alternativa | Ya está pago por un año; SFTP usa un solo puerto cifrado y evita los problemas de FTPS con conexiones pasivas y reutilización de sesión TLS |
+| Acceso al almacén | Interfaz `AlmacenAudio` con implementaciones `sftp`, `ftps` y `local` | Cambiar de servidor al vencer el año (u otro destino, como S3) es cambiar la configuración |
 | Rutas de audio | Relativas al directorio del FTP | Permite cambiar de servidor sin tocar la base |
 | Transcripción | Propia, con el patrón **Strategy**: una estrategia por proveedor | Ninguna llamada trae transcripción; se puede cambiar o comparar proveedores sin tocar el resto del código |
 | Cuándo transcribir | Bajo demanda al abrir una llamada, y en lote por filtros con costo estimado previo | Coherente con la estrategia mixta de audio; no se paga por llamadas que nadie audita |
@@ -73,7 +74,7 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 │ servicios/   lógica de negocio, recibe y devuelve Pydantic │
 │ db/          modelos SQLAlchemy, sesión, Alembic           │
 │ clientes/    chatwoot.py, ringover.py, cloudtalk.py        │
-│ audio/       conversión a MP3 y almacén FTP                │
+│ audio/       conversión a MP3 y almacén (SFTP/FTPS/local)  │
 │ transcripcion/ estrategias por proveedor (OpenAI, Alibaba…)│
 │ sync/        proceso aparte que llena la base y transcribe │
 └───────┬───────────────────┬───────────────────┬────────────┘
@@ -114,7 +115,10 @@ app/
     usuarios.py        # usuarios del panel y roles
   audio/
     conversion.py      # WAV → MP3 con ffmpeg
-    almacen_ftp.py     # subir, bajar, existe
+    almacen.py         # interfaz AlmacenAudio: subir, bajar, existe, borrar, listar
+    almacen_sftp.py    # paramiko
+    almacen_ftps.py    # ftplib.FTP_TLS con canal de datos cifrado
+    almacen_local.py   # carpeta en disco, para desarrollo y pruebas
   asignacion/
     base.py            # interfaz EstrategiaAsignacion y esquemas
     registro.py        # nombre → estrategia
@@ -324,6 +328,14 @@ Flujo `obtener_audio(llamada) -> bytes`:
 Ruta en el FTP: `{plataforma}/{año}/{mes}/{id_externo}.mp3`, guardada en la
 base relativa a `FTP_DIR`.
 
+El servidor es el hosting contratado, administrado con Plesk. Se usa **SFTP**
+(opción «Permitir SFTP para cuentas FTP», puerto 8023) con una cuenta FTP
+propia cuyo directorio está fuera de la carpeta pública del sitio. FTPS queda
+como alternativa: en ese caso se cifra también el canal de datos (`prot_p`)
+y se prueba que el servidor acepte la conexión de datos sin reutilizar la
+sesión TLS, porque `ftplib` no la reutiliza y ProFTPD suele exigirla. El FTP
+sin cifrar no se usa.
+
 **Retención: 3 meses** (`AUDIO_RETENCION_DIAS=90`), contados desde la fecha
 de la llamada. Una vez al día, `sync` borra del FTP los MP3 vencidos y marca
 la llamada como `audio_estado = eliminado_por_retencion`. Lo que se conserva
@@ -484,8 +496,9 @@ tabla `usuarios`. El usuario actual de las variables de entorno se crea como
 | `DATABASE_URL` | `postgresql+psycopg://usuario:clave@host:5432/base` |
 | `TZ_OPERACION` | `Europe/Madrid` |
 | `TELEFONO_REGION` | `ES` |
-| `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al FTP |
-| `FTP_TLS` | `true` para FTPS |
+| `ALMACEN_TIPO` | `sftp` (por defecto), `ftps` o `local` |
+| `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al servidor; con SFTP, `FTP_PORT=8023` |
+| `SFTP_HUELLA_HOST` | Huella de la clave del servidor SFTP, para verificar que es el servidor correcto |
 | `AUDIO_RETENCION_DIAS` | `90` |
 | `SYNC_INTERVALO_MINUTOS` | Frecuencia de la sincronización |
 | `TRANSCRIPCION_PROVEEDOR` | Estrategia por defecto: `openai`, `alibaba`, `falsa`… |
@@ -499,7 +512,7 @@ Las variables actuales se mantienen.
 ### 5.11 Dependencias nuevas
 
 `sqlalchemy`, `alembic`, `psycopg[binary]`, `pydantic`, `pydantic-settings`,
-`phonenumbers`, `openpyxl`, `openai` y el SDK de Alibaba (`dashscope`) o
+`phonenumbers`, `openpyxl`, `paramiko`, `openai` y el SDK de Alibaba (`dashscope`) o
 llamadas HTTP directas con `requests`. En el `Dockerfile`: el paquete del sistema
 `ffmpeg`. Para las pruebas de base de datos: `testcontainers[postgres]` o un
 Postgres de servicio en CI.
@@ -560,7 +573,8 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
   unitarias con `pytest`, como hoy.
 - Servicios con base de datos: contra un Postgres real de prueba, no SQLite,
   porque se usan `EXCLUDE`, `JSONB` y `timestamptz`.
-- Clientes de API y FTP: simulados (`responses` y un FTP falso).
+- Clientes de API: simulados con `responses`. Almacén: el mismo juego de
+  pruebas corre contra `local` y contra un servidor SFTP de prueba.
 - Transcripción: un mismo juego de pruebas de contrato que corre contra cada
   estrategia con respuestas grabadas del proveedor (formato común, hablantes,
   errores y límites). El contexto se prueba con la estrategia `falsa`: partir
@@ -574,7 +588,8 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
 2. ¿Con qué proveedor arrancamos por defecto? Propuesta: transcribir una
    muestra de 20 llamadas reales con OpenAI y con Alibaba y decidir por
    calidad y precio.
-3. ¿El FTP del hosting acepta FTPS? ¿Cuánto espacio tiene el plan?
+3. ¿Cuánto espacio en disco tiene el plan del hosting? ¿El puerto 8023 de
+   SFTP está abierto en el firewall del hosting?
 4. ¿Cuál es el endpoint de grabaciones de Ringover?
 5. ¿Alguna bandeja de Chatwoot también es compartida? Si es así, usa las mismas
    estrategias de asignación.
