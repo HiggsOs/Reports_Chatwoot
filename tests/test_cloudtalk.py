@@ -5,7 +5,13 @@ import pytest
 import responses
 
 import cloudtalk
-from cloudtalk import ClienteCloudTalk, CloudTalkAuthError, CloudTalkError, fue_grabada
+from cloudtalk import (
+    ClienteCloudTalk,
+    CloudTalkAuthError,
+    CloudTalkError,
+    GrabacionVencida,
+    fue_grabada,
+)
 
 BOGOTA = ZoneInfo("America/Bogota")
 DESDE = datetime(2026, 9, 1, 0, 0, tzinfo=BOGOTA)
@@ -252,3 +258,33 @@ def test_se_puede_rendir_al_primer_limite():
     with pytest.raises(CloudTalkError):
         ClienteCloudTalk("id", "s", intentos_limite=1).obtener_transcripcion("27")
     assert len(responses.calls) == 1
+
+
+URL_GRABACION = "https://my.cloudtalk.io/api/calls/recording/27.json"
+
+
+@responses.activate
+def test_obtener_grabacion_devuelve_el_audio_tal_cual():
+    responses.get(URL_GRABACION, body=b"RIFF....WAVEfmt ", content_type="audio/wav")
+    assert cliente().obtener_grabacion("27") == b"RIFF....WAVEfmt "
+
+
+@responses.activate
+def test_obtener_grabacion_sin_grabacion():
+    responses.get(URL_GRABACION, status=404)
+    assert cliente().obtener_grabacion("27") is None
+
+
+@responses.activate
+def test_obtener_grabacion_vencida():
+    responses.get(URL_GRABACION, status=410)
+    with pytest.raises(GrabacionVencida):
+        cliente().obtener_grabacion("27")
+
+
+@responses.activate
+def test_obtener_grabacion_respeta_el_limite_de_peticiones(esperas):
+    responses.get(URL_GRABACION, status=429, headers={"Retry-After": "3"})
+    responses.get(URL_GRABACION, body=b"RIFF")
+    assert cliente().obtener_grabacion("27") == b"RIFF"
+    assert 3.0 in esperas

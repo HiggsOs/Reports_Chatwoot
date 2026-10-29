@@ -152,6 +152,9 @@ class FuenteCloudTalk:
         convertidas = (llamada_de_cloudtalk(ll) for ll in self._cliente.listar_llamadas(desde, hasta))
         return [ll for ll in convertidas if ll is not None]
 
+    def grabacion(self, id_externo: str) -> bytes | None:
+        return self._cliente.obtener_grabacion(id_externo)
+
 
 class FuenteChatwoot:
     plataforma = "chatwoot"

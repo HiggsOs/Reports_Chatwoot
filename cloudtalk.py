@@ -84,6 +84,10 @@ class CloudTalkAuthError(CloudTalkError):
     """Las credenciales fueron rechazadas, o falta Conversation Intelligence."""
 
 
+class GrabacionVencida(CloudTalkError):
+    """CloudTalk ya borró la grabación (respuesta 410)."""
+
+
 class ClienteCloudTalk:
     def __init__(
         self,
@@ -116,7 +120,10 @@ class ClienteCloudTalk:
                 time.sleep(faltante)
         self._ultima_peticion = time.monotonic()
 
-    def _pedir(self, url: str, permitir_404: bool = False, **kwargs: Any) -> Any:
+    def _pedir(
+        self, url: str, permitir_404: bool = False, binario: bool = False, **kwargs: Any
+    ) -> Any:
+        """`binario` devuelve el contenido tal cual en vez de leerlo como JSON."""
         fallos = 0
         limites = 0
         ultimo_error = ""
@@ -142,8 +149,10 @@ class ClienteCloudTalk:
                 )
             if respuesta.status_code == 404 and permitir_404:
                 return None
+            if respuesta.status_code == 410 and binario:
+                raise GrabacionVencida(f"CloudTalk ya no tiene el archivo de {url}.")
             if respuesta.status_code < 400:
-                return respuesta.json()
+                return respuesta.content if binario else respuesta.json()
             if respuesta.status_code == 429:
                 ultimo_error = "HTTP 429"
                 self._frenar()
@@ -240,6 +249,16 @@ class ClienteCloudTalk:
     def listar_numeros(self) -> list[dict]:
         return [f["CallNumber"] for f in self._listar_paginado("/numbers/index.json")
                 if isinstance(f.get("CallNumber"), dict)]
+
+    def obtener_grabacion(self, call_id: str) -> bytes | None:
+        """El audio de la llamada en WAV, o None si no se grabó.
+
+        Lanza GrabacionVencida si CloudTalk ya la borró. Cuenta para el mismo
+        límite de peticiones que el resto de la API.
+        """
+        return self._pedir(
+            f"{self._base}/calls/recording/{call_id}.json", permitir_404=True, binario=True
+        )
 
     def obtener_transcripcion(self, call_id: str) -> dict | None:
         """Devuelve la transcripción de una llamada, o None si no tiene.

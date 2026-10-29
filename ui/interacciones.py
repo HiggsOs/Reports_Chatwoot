@@ -19,6 +19,7 @@ from panel.db.repositorios.cuentas import RepositorioCuentas
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.servicios import consultas
 from panel.servicios.interacciones import SIN_ASIGNAR, ServicioInteracciones
+from ui.audio import etiqueta_estado, reproductor
 
 # El cliente que eligió otra página para abrir en Historial del cliente.
 CLAVE_CLIENTE_ELEGIDO = "cliente_elegido"
@@ -73,6 +74,7 @@ VISTAS = {
             "direccion": "Dirección",
             "duracion_s": "Duración (s)",
             "grabada": "Grabada",
+            "audio_estado": "Audio",
         },
         archivo="llamadas",
         enlace=_enlace_llamada,
@@ -126,6 +128,8 @@ def _tabla(filas: list[consultas.FilaInteraccion], columnas: dict[str, str]) -> 
         datos["Fecha"] = pd.to_datetime(datos["Fecha"]).dt.strftime("%d/%m/%Y %H:%M")
     if "Cierre" in datos:
         datos["Cierre"] = pd.to_datetime(datos["Cierre"]).dt.strftime("%d/%m/%Y %H:%M")
+    if "Audio" in datos:
+        datos["Audio"] = datos["Audio"].map(etiqueta_estado)
     return datos
 
 
@@ -134,8 +138,11 @@ def _personas(fabrica):
         return RepositorioPersonas(sesion).listar()
 
 
-def pagina(fabrica: sessionmaker[Session], cfg: Config, tipo: str, historial=None) -> None:
-    """`historial`: la página Historial del cliente, para ir directo desde el detalle."""
+def pagina(
+    fabrica: sessionmaker[Session], cfg: Config, tipo: str, historial=None, audio=None
+) -> None:
+    """`historial`: la página Historial del cliente, para ir directo desde el
+    detalle. `audio`: el servicio de audio, para escuchar las llamadas."""
     vista = VISTAS[tipo]
     st.title(vista.titulo)
     personas = _personas(fabrica)
@@ -203,10 +210,10 @@ def pagina(fabrica: sessionmaker[Session], cfg: Config, tipo: str, historial=Non
 
     seleccion = evento.selection.rows if evento else []
     if seleccion:
-        _detalle(fabrica, cfg, vista, filas[seleccion[0]], personas, historial)
+        _detalle(fabrica, cfg, vista, filas[seleccion[0]], personas, historial, audio)
 
 
-def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial) -> None:
+def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial, audio) -> None:
     st.subheader(f"{vista.titulo[:-1]} {fila.id_externo}")
     datos = {
         "Fecha": f"{fila.inicio:%d/%m/%Y %H:%M}",
@@ -225,6 +232,8 @@ def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial) -> None:
             st.session_state[CLAVE_CLIENTE_ELEGIDO] = fila.cliente_id
             st.switch_page(historial)
 
+    if vista.tipo == "llamada":
+        reproductor(audio, fila.id, cfg.audio_retencion_dias)
     editor_asignacion(fabrica, vista.tipo, fila.id, fila.persona_id, fila.asignacion, personas)
 
 

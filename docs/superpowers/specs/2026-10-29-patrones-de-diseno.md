@@ -89,7 +89,7 @@ lo demás.
 | Preparación del audio (mono / estéreo) | **Strategy** elegida por una **Factory** | — |
 | Asignación de cuentas compartidas | **Strategy** | Registry, parámetros tipados, vigencia |
 | Fuentes de datos (CloudTalk, Chatwoot) | **Adapter** | Template Method en la sincronización |
-| Almacén de audio | **Adapter** (puertos y adaptadores) | Decorator para pendientes y caché |
+| Almacén de audio | **Adapter** (puertos y adaptadores) | — |
 | Acceso a datos | **Repository** + **Unit of Work** | — |
 | Cola de transcripción | **Command** | Productor / consumidor |
 | Retención | **Strategy** (una política por tipo de dato) | — |
@@ -240,19 +240,18 @@ se toca:** la sincronización, la asignación, la base ni las pantallas.
 
 ## 8. Almacén de audio
 
-**Problema.** Hoy el audio va al hosting por SFTP; podría ser FTPS, una carpeta
-local para desarrollo o S3 cuando venza el año del hosting.
+**Problema.** Hoy el audio va al hosting por SFTP; podría ser una carpeta
+local para desarrollo, FTPS o S3 cuando venza el año del hosting.
 
 **Patrón: Adapter (puertos y adaptadores).** Interfaz `AlmacenAudio` con
-`subir`, `bajar`, `existe`, `borrar` y `listar`. Implementaciones: `sftp`,
-`ftps` y `local`. En la base se guarda la ruta relativa, nunca el servidor.
+`subir`, `bajar`, `existe` y `borrar`. Implementaciones: `sftp` y `local`. En la
+base se guarda la ruta relativa, nunca el servidor.
 
-**Decorator** para lo que es igual en cualquier destino:
-
-- `ConPendientes(almacen)`: si la subida falla, guarda el archivo en
-  `DATA_DIR/audio_pendiente/` y lo reintenta después.
-- `ConCacheLocal(almacen)`: guarda en disco los audios usados hace poco para no
-  volver a bajarlos.
+Los pendientes de subir no quedaron como un decorador sobre el almacén, como
+se había previsto, sino en el servicio de audio y en la tabla
+`audios_pendientes`: la app y la sincronización corren en contenedores
+distintos, así que un pendiente en el disco de la app no lo vería nunca la
+sincronización. La caché de lo escuchado vive en la sesión de Streamlit.
 
 **Por qué:** la lógica de audio (escuchar, convertir, retener) no sabe dónde
 están los archivos. Cambiar de servidor es configuración más una copia de

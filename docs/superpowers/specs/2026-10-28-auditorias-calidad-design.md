@@ -71,8 +71,8 @@ La arquitectura no impide agregar nada de esto después.
 | Audio | Mixto: bajo demanda; se guarda en MP3 lo que se escucha | Poco espacio y la evidencia de cada auditoría queda guardada |
 | Retención de audios | 3 meses desde la fecha de la llamada | Alcanza para auditar y reclamar una nota |
 | Retención de transcripciones | 3 años desde la fecha de la llamada | Plazo definido por la empresa; las auditorías se conservan |
-| Almacén de audio | Hosting contratado (Plesk) por **SFTP** en el puerto 8023; FTPS como alternativa | Ya está pago por un año; SFTP usa un solo puerto cifrado y evita los problemas de FTPS con conexiones pasivas y reutilización de sesión TLS |
-| Acceso al almacén | Interfaz `AlmacenAudio` con implementaciones `sftp`, `ftps` y `local` | Cambiar de servidor al vencer el año (u otro destino, como S3) es cambiar la configuración |
+| Almacén de audio | Hosting contratado (Plesk) por **SFTP** en el puerto 8023 | Ya está pago por un año; SFTP usa un solo puerto cifrado y evita los problemas de FTPS con conexiones pasivas y reutilización de sesión TLS |
+| Acceso al almacén | Interfaz `AlmacenAudio` con implementaciones `sftp` y `local` (FTPS o S3 se suman como otra implementación si hacen falta) | Cambiar de servidor al vencer el año (u otro destino, como S3) es cambiar la configuración |
 | Rutas de audio | Relativas al directorio del FTP | Permite cambiar de servidor sin tocar la base |
 | Transcripción | Propia, con el patrón **Strategy**: una estrategia por proveedor | Ninguna llamada trae transcripción; se puede cambiar o comparar proveedores sin tocar el resto del código |
 | Proveedor inicial | OpenAI; Alibaba y otros quedan como estrategias posteriores | Elegido por la empresa |
@@ -91,7 +91,7 @@ La arquitectura no impide agregar nada de esto después.
 │ servicios/   lógica de negocio, recibe y devuelve Pydantic │
 │ db/          modelos SQLAlchemy, sesión, Alembic           │
 │ clientes/    chatwoot.py, cloudtalk.py                     │
-│ audio/       conversión a MP3 y almacén (SFTP/FTPS/local)  │
+│ audio/       conversión a MP3 y almacén (SFTP/local)       │
 │ transcripcion/ estrategias por proveedor (OpenAI, Alibaba…)│
 │ sync/        proceso aparte que llena la base y transcribe │
 └───────┬───────────────────┬───────────────────┬────────────┘
@@ -134,10 +134,9 @@ panel/                 # se llama panel/ y no app/ para no chocar con app.py
     retencion.py       # borrado de audios (3 meses) y transcripciones (3 años)
   audio/
     conversion.py      # WAV → MP3 con ffmpeg
-    almacen.py         # interfaz AlmacenAudio: subir, bajar, existe, borrar, listar
-    almacen_sftp.py    # paramiko
-    almacen_ftps.py    # ftplib.FTP_TLS con canal de datos cifrado
-    almacen_local.py   # carpeta en disco, para desarrollo y pruebas
+    almacen.py         # AlmacenAudio y sus implementaciones: local y SFTP (paramiko)
+    huella.py          # python -m panel.audio.huella: huella del servidor SFTP
+    servicio.py        # escuchar, subir pendientes y retención
   asignacion/
     base.py            # interfaz EstrategiaAsignacion y esquemas
     registro.py        # nombre → estrategia
@@ -349,25 +348,26 @@ Flujo `obtener_audio(llamada) -> bytes`:
 2. Si no, se pide el WAV a la plataforma
    (CloudTalk: `GET /calls/recording/{id}.json`). `404` → `sin_grabación`;
    `410` → `vencida`. En ninguno de los dos casos se reintenta.
-3. Se convierte a MP3 mono (aprox. 32 kbps) con `ffmpeg` y se devuelve para
-   reproducirlo.
-4. La subida al FTP corre después, en segundo plano. Si falla, el MP3 queda en
-   `DATA_DIR/audio_pendiente/` y `sync` reintenta la subida.
+3. Se convierte a MP3 con `ffmpeg` y se devuelve para reproducirlo: mono a
+   32 kbps, o estéreo a 64 kbps si la grabación es estéreo, para no perder la
+   separación de canales que usa la transcripción (etapa 6). Con audio
+   telefónico de 8 kHz el MP3 ocupa unas cuatro veces menos que el WAV.
+4. La subida al FTP corre después de mostrar el reproductor. Si falla, el MP3
+   queda en la tabla `audios_pendientes` (en la base y no en disco, porque la
+   app y `sync` son contenedores distintos) y `sync` reintenta la subida.
 
 Ruta en el FTP: `{plataforma}/{año}/{mes}/{id_externo}.mp3`, guardada en la
 base relativa a `FTP_DIR`.
 
 El servidor es el hosting contratado, administrado con Plesk. Se usa **SFTP**
 (opción «Permitir SFTP para cuentas FTP», puerto 8023) con una cuenta FTP
-propia cuyo directorio está fuera de la carpeta pública del sitio. FTPS queda
-como alternativa: en ese caso se cifra también el canal de datos (`prot_p`)
-y se prueba que el servidor acepte la conexión de datos sin reutilizar la
-sesión TLS, porque `ftplib` no la reutiliza y ProFTPD suele exigirla. El FTP
-sin cifrar no se usa.
+propia cuyo directorio está fuera de la carpeta pública del sitio. El FTP sin
+cifrar no se usa. FTPS no se implementó: se suma como otra implementación de
+`AlmacenAudio` si algún día hace falta.
 
 **Retención de audios: 3 meses** (`AUDIO_RETENCION_DIAS=90`), contados desde
 la fecha de la llamada. Una vez al día, `sync` borra del FTP los MP3 vencidos y marca
-la llamada como `audio_estado = eliminado_por_retencion`. Lo que se conserva
+la llamada como `audio_estado = eliminado`. Lo que se conserva
 en la base después de ese plazo:
 
 - La transcripción (hasta cumplir 3 años), las auditorías con sus puntajes y
@@ -566,7 +566,7 @@ solo sumarían quién las hizo.
 |---|---|
 | `DATABASE_URL` | `postgresql+psycopg://usuario:clave@host:5432/base` |
 | `TELEFONO_REGION` | `ES` |
-| `ALMACEN_TIPO` | `sftp` (por defecto), `ftps` o `local` |
+| `ALMACEN_TIPO` | `sftp`, `local` (desarrollo) o vacío (se escucha sin guardar) |
 | `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al servidor; con SFTP, `FTP_PORT=8023` |
 | `SFTP_HUELLA_HOST` | Huella de la clave del servidor SFTP, para verificar que es el servidor correcto |
 | `AUDIO_RETENCION_DIAS` | `90` |
@@ -632,7 +632,7 @@ Criterios comunes a todas las páginas:
 | 2 ✅ | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
 | 3 ✅ | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 ✅ | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
-| 5 | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
+| 5 ✅ | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
 | 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync`, retención de 3 años | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
 | 7 | Auditorías | Fichas, auditorías y cálculo de nota | Fichas, Auditar y Auditorías | Se audita |
 | 8 | Reportes | Reportes y Excel | Reportes | Se descarga el reporte de auditorías |
@@ -668,6 +668,25 @@ Decisiones de la etapa 4:
   también busca por nombre del cliente.
 - Auditar desde el historial llega con la etapa 7; por ahora el historial
   permite cambiar el asesor y abrir la interacción en su plataforma.
+
+Decisiones de la etapa 5:
+
+- El audio se pide recién cuando alguien toca «Escuchar», no al elegir la fila:
+  así no se gastan peticiones de CloudTalk ni espacio en llamadas que nadie
+  escucha.
+- Una grabación estéreo se guarda en MP3 estéreo (64 kbps) para conservar la
+  separación de canales que usa la transcripción; una mono, en mono (32 kbps).
+- Los MP3 que no se pudieron subir quedan en la tabla `audios_pendientes`, no en
+  disco: la app y `sync` son contenedores distintos. `sync` los reintenta en
+  cada ciclo (tarea `audios_pendientes`) y una vez por día borra los vencidos
+  (tarea `retencion_audios`); las dos se ven en Inicio.
+- Sin `ALMACEN_TIPO`, las llamadas se escuchan igual pero no se guardan.
+- Una llamada más vieja que el plazo (o cuyo audio ya se borró) se escucha si
+  CloudTalk todavía la tiene, pero no se vuelve a guardar.
+- El servidor SFTP se verifica por su huella (`SFTP_HUELLA_HOST`), que se
+  obtiene una vez con `python -m panel.audio.huella HOST PUERTO`.
+- La excepción de «no borrar el audio de una auditoría en borrador» llega con
+  las auditorías, en la etapa 7.
 La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
 etapa.
 

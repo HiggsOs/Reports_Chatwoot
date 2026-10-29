@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -174,6 +175,14 @@ class Asignable:
         )
 
 
+AUDIO_GUARDADO = "guardado"  # en el almacén
+AUDIO_PENDIENTE = "pendiente"  # en audios_pendientes, falta subirlo
+AUDIO_SIN_GRABACION = "sin_grabacion"  # CloudTalk no tiene grabación
+AUDIO_VENCIDO = "vencido"  # CloudTalk ya la borró
+AUDIO_ELIMINADO = "eliminado"  # se borró del almacén al cumplir el plazo
+ESTADOS_AUDIO = (AUDIO_GUARDADO, AUDIO_PENDIENTE, AUDIO_SIN_GRABACION, AUDIO_VENCIDO, AUDIO_ELIMINADO)
+
+
 class Llamada(Asignable, MarcasDeTiempo, Base):
     """Una llamada contestada de CloudTalk."""
 
@@ -191,6 +200,12 @@ class Llamada(Asignable, MarcasDeTiempo, Base):
     # Lo que devolvió la API, tal cual, para no tener que volver a pedirlo si
     # después hace falta otro campo.
     datos_origen: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    # Audio (ver panel/audio/servicio.py). Vacío: nunca se pidió.
+    audio_estado: Mapped[str | None] = mapped_column(String(20))
+    audio_ruta: Mapped[str | None] = mapped_column(Text)  # relativa al almacén
+    audio_canales: Mapped[int | None] = mapped_column(Integer)
+    audio_bytes: Mapped[int | None] = mapped_column(Integer)
+    audio_guardado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     cuenta: Mapped[Cuenta] = relationship()
     persona: Mapped[Persona | None] = relationship()
@@ -198,6 +213,12 @@ class Llamada(Asignable, MarcasDeTiempo, Base):
 
     __table_args__ = (
         Asignable._restriccion_asignacion(),
+        CheckConstraint(
+            "audio_estado IS NULL OR audio_estado IN ("
+            + ", ".join(f"'{e}'" for e in ESTADOS_AUDIO)
+            + ")",
+            name="audio_estado_valido",
+        ),
         Index("ix_llamadas_inicio", "inicio"),
         Index("ix_llamadas_cuenta_id_inicio", "cuenta_id", "inicio"),
         Index("ix_llamadas_persona_id", "persona_id"),
@@ -251,3 +272,23 @@ class PuntoSincronizacion(Base):
     ultimo_exito: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ultimo_error: Mapped[str | None] = mapped_column(Text)
     resumen: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class AudioPendiente(Base):
+    """Un MP3 escuchado que todavía no se pudo subir al almacén.
+
+    Vive en la base y no en disco porque la app y la sincronización corren en
+    contenedores distintos: así la sincronización puede reintentar la subida.
+    """
+
+    __tablename__ = "audios_pendientes"
+
+    llamada_id: Mapped[int] = mapped_column(
+        ForeignKey("llamadas.id", ondelete="CASCADE"), primary_key=True
+    )
+    contenido: Mapped[bytes] = mapped_column(LargeBinary)
+    intentos: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    ultimo_error: Mapped[str | None] = mapped_column(Text)
+    creado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

@@ -30,8 +30,9 @@ CLAVE_BLOQUEO_SINCRONIZACION = 7_420_002
 
 class ResultadoSincronizacion(BaseModel):
     fuente: str
-    desde: datetime
-    hasta: datetime
+    # Vacíos en las tareas de mantenimiento, que no trabajan por rango.
+    desde: datetime | None = None
+    hasta: datetime | None = None
     resumen: dict[str, Any] = {}
     error: str | None = None
 
@@ -168,11 +169,13 @@ class SincronizadorConversaciones(Sincronizador):
 
 def ejecutar_ciclo(
     fabrica: sessionmaker[Session],
-    sincronizadores: list[Sincronizador],
+    sincronizadores: list,
     desde: datetime | None = None,
     hasta: datetime | None = None,
 ) -> list[ResultadoSincronizacion] | None:
-    """Corre cada sincronizador. Devuelve None si ya hay otro ciclo en curso."""
+    """Corre cada sincronizador y después cada tarea de mantenimiento (todos
+    tienen `ejecutar(desde, hasta)`). Devuelve None si ya hay otro ciclo en
+    curso."""
     with fabrica() as sesion:
         tomado = sesion.scalar(select(func.pg_try_advisory_lock(CLAVE_BLOQUEO_SINCRONIZACION)))
         if not tomado:

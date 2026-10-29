@@ -32,13 +32,14 @@ tres grupos.
 - **Llamadas** y **Conversaciones**: listado con filtros (fechas, asesor,
   cuenta, cliente por nombre o teléfono, solo sin asignar) y descarga en CSV.
   Al elegir una fila se ve el detalle, el enlace a CloudTalk o a Chatwoot y se
-  puede cambiar el asesor a mano o ir al historial del cliente.
+  puede escuchar la llamada, cambiar el asesor a mano o ir al historial del
+  cliente.
 - **Historial del cliente**: se busca un teléfono en cualquier formato
   (`612 345 678`, `+34…`, `0034…`, o una parte) o un nombre, y se ven todas sus
   llamadas y chats en una línea de tiempo, con el asesor que atendió cada uno y
   cuántas veces atendió cada asesor. Al elegir un chat se lee la conversación
   completa (mensajes del cliente, del asesor, notas internas y actividad); al
-  elegir una llamada, el enlace a CloudTalk. Desde ahí también se cambia el
+  elegir una llamada, el reproductor y el enlace a CloudTalk. Desde ahí también se cambia el
   asesor. La casilla *Teléfonos por revisar* muestra los números que no se
   pudieron interpretar.
 
@@ -82,6 +83,11 @@ a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 | `SYNC_INTERVALO_MINUTOS` | Cada cuánto corre la sincronización. Por defecto `15` |
 | `SYNC_DIAS_INICIALES` | Cuántos días hacia atrás trae la primera sincronización de cada fuente. Por defecto `30` |
 | `CHATWOOT_DIAS_RELECTURA` | Cuántos días hacia atrás relee Chatwoot en cada ciclo, porque las conversaciones cambian después de creadas. Por defecto `14` |
+| `ALMACEN_TIPO` | Dónde se guardan los audios escuchados: `sftp` (el hosting), `local` (una carpeta en `DATA_DIR/audios`, solo para desarrollo) o vacío (se escuchan pero no se guardan) |
+| `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD` | Acceso SFTP a la cuenta FTP de los audios. En el hosting, `FTP_PORT=8023` |
+| `FTP_DIR` | Carpeta de los audios dentro de esa cuenta. Por defecto `/` |
+| `SFTP_HUELLA_HOST` | Huella del servidor SFTP (`SHA256:…`); ver *Audio de las llamadas* |
+| `AUDIO_RETENCION_DIAS` | Días que se guarda un audio, desde la fecha de la llamada. Por defecto `90` |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -240,6 +246,49 @@ python -m panel.sync --desde 2026-01-01 --hasta 2026-06-30
 
 El segundo carga el historial de ese rango, por ejemplo la primera vez, sin
 mover el punto de la sincronización normal.
+
+## Audio de las llamadas
+
+En el detalle de una llamada (páginas *Llamadas* e *Historial del cliente*),
+*▶ Escuchar la llamada* trae la grabación de CloudTalk
+(`GET /calls/recording/{id}.json`), la convierte a MP3 con `ffmpeg` y la
+reproduce. Después la guarda en el almacén, así la próxima vez sale de ahí sin
+volver a CloudTalk.
+
+- Solo se pide cuando alguien la escucha, no al elegir la fila.
+- Una grabación estéreo se guarda en estéreo (64 kbps) para conservar la
+  separación de canales; una mono, en mono (32 kbps). Con audio telefónico el
+  MP3 ocupa unas cuatro veces menos que el WAV (unos 0,24 MB por minuto en
+  mono).
+- Si CloudTalk responde que no hay grabación (`404`) o que ya la borró (`410`),
+  queda anotado y no se vuelve a pedir.
+- Si la subida al almacén falla, el MP3 queda en la base (tabla
+  `audios_pendientes`) y se sigue escuchando desde ahí; la sincronización
+  reintenta la subida en cada ciclo.
+- **Retención**: una vez por día, la sincronización borra del almacén los audios
+  de llamadas con más de `AUDIO_RETENCION_DIAS` días (el día 90 se conserva, el
+  91 se borra). Una llamada más vieja se puede escuchar si CloudTalk todavía la
+  tiene, pero no se vuelve a guardar.
+- La columna *Audio* de la página *Llamadas* dice en qué estado está cada una.
+
+### Configurar el SFTP del hosting
+
+1. En Plesk, en *FTP seguro*, activar **Permitir SFTP para cuentas FTP** (puerto
+   `8023`) y comprobar que ese puerto esté abierto en el firewall.
+2. Crear una **cuenta FTP solo para los audios**, con su directorio **fuera de
+   `httpdocs`**: lo que está en `httpdocs` se puede abrir desde internet.
+3. Obtener la huella del servidor desde cualquier equipo con el proyecto
+   instalado, y cargarla en `SFTP_HUELLA_HOST`:
+
+   ```bash
+   python -m panel.audio.huella ftp.midominio.com 8023
+   ```
+
+   La app verifica esa huella en cada conexión y no envía nada si no coincide:
+   así nadie que se haga pasar por el servidor recibe las grabaciones. Si el
+   hosting cambia la clave del servidor, hay que volver a obtenerla.
+4. Cargar `ALMACEN_TIPO=sftp` y las variables `FTP_*` en **los dos servicios**
+   de EasyPanel (la app y la sincronización).
 
 ## Nota sobre la fecha de cierre
 

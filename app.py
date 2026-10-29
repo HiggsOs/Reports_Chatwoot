@@ -14,6 +14,7 @@ import streamlit_authenticator as stauth
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ConfigError, cargar_config, ruta_asesores
+from panel.composicion import servicio_audio
 from panel.db.base import (
     comprobar_conexion,
     crear_fabrica_sesiones,
@@ -48,6 +49,13 @@ def obtener_fabrica(database_url: str):
 def importar_asesores_una_vez(database_url: str, ruta: str):
     """Copia `asesores.csv` a la base la primera vez que arranca la app."""
     return importar_asesores_csv(Path(ruta), obtener_fabrica(database_url))
+
+
+@st.cache_resource
+def obtener_audio(database_url: str):
+    """Uno para toda la app: comparte el cliente de CloudTalk y su control del
+    límite de peticiones."""
+    return servicio_audio(obtener_fabrica(database_url), CFG)
 
 
 def leer_areas() -> dict[str, str]:
@@ -104,6 +112,7 @@ if st.session_state.get("authentication_status") is None:
 autenticador.logout("Cerrar sesión", "sidebar")
 
 FABRICA = obtener_fabrica(CFG.database_url)
+AUDIO = obtener_audio(CFG.database_url)
 
 
 def pagina(funcion, titulo: str, ruta: str, icono: str, **extra) -> st.Page:
@@ -111,7 +120,7 @@ def pagina(funcion, titulo: str, ruta: str, icono: str, **extra) -> st.Page:
 
 
 historial = pagina(ui_clientes.mostrar, "Historial del cliente", "historial", "🧾",
-                   fabrica=FABRICA, cfg=CFG)
+                   fabrica=FABRICA, cfg=CFG, audio=AUDIO)
 sin_asignar = pagina(ui_interacciones.sin_asignar, "Sin asignar", "sin-asignar", "📥",
                      fabrica=FABRICA, cfg=CFG)
 cuentas = pagina(ui_cuentas.mostrar, "Cuentas", "cuentas", "🗂️", fabrica=FABRICA, cfg=CFG)
@@ -129,7 +138,7 @@ navegacion = st.navigation(
             inicio,
             sin_asignar,
             pagina(ui_interacciones.pagina, "Llamadas", "llamadas", "📞",
-                   fabrica=FABRICA, cfg=CFG, tipo="llamada", historial=historial),
+                   fabrica=FABRICA, cfg=CFG, tipo="llamada", historial=historial, audio=AUDIO),
             pagina(ui_interacciones.pagina, "Conversaciones", "conversaciones", "💬",
                    fabrica=FABRICA, cfg=CFG, tipo="conversacion", historial=historial),
             historial,

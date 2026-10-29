@@ -13,7 +13,12 @@ from panel.db.base import unidad_de_trabajo
 from panel.servicios import consultas
 from panel.sync.sincronizadores import ejecutar_ciclo
 
-NOMBRES_FUENTE = {"cloudtalk": "CloudTalk (llamadas)", "chatwoot": "Chatwoot (conversaciones)"}
+NOMBRES_FUENTE = {
+    "cloudtalk": "CloudTalk (llamadas)",
+    "chatwoot": "Chatwoot (conversaciones)",
+    "audios_pendientes": "Audios por subir al servidor",
+    "retencion_audios": "Borrado de audios vencidos (una vez por día)",
+}
 
 
 def _fecha(momento: datetime | None) -> str:

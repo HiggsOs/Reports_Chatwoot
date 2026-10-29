@@ -9,6 +9,7 @@ from panel.db.base import unidad_de_trabajo
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.servicios import clientes
 from panel.servicios.clientes import SIN_ASIGNAR
+from ui.audio import reproductor
 from ui.interacciones import CLAVE_CLIENTE_ELEGIDO, editor_asignacion
 
 TIPOS = {"llamada": "📞 Llamada", "conversacion": "💬 Chat"}
@@ -34,7 +35,8 @@ def _descripcion(resumen: clientes.ResumenCliente) -> str:
     return " — ".join(partes)
 
 
-def mostrar(fabrica: sessionmaker[Session], cfg: Config) -> None:
+def mostrar(fabrica: sessionmaker[Session], cfg: Config, audio=None) -> None:
+    """`audio`: el servicio de audio, para escuchar las llamadas."""
     st.title("Historial del cliente")
     st.caption(
         "Busque un número en cualquier formato (612 345 678, +34 612…, 0034…) o un "
@@ -81,7 +83,7 @@ def mostrar(fabrica: sessionmaker[Session], cfg: Config) -> None:
         return
 
     _encabezado(resultado)
-    _linea_de_tiempo(fabrica, cfg, resultado, personas)
+    _linea_de_tiempo(fabrica, cfg, resultado, personas, audio)
 
 
 def _encabezado(resultado: clientes.Historial) -> None:
@@ -101,7 +103,7 @@ def _encabezado(resultado: clientes.Historial) -> None:
     )
 
 
-def _linea_de_tiempo(fabrica, cfg: Config, resultado: clientes.Historial, personas) -> None:
+def _linea_de_tiempo(fabrica, cfg: Config, resultado: clientes.Historial, personas, audio) -> None:
     st.subheader("Línea de tiempo")
     tabla = pd.DataFrame(
         [
@@ -135,6 +137,7 @@ def _linea_de_tiempo(fabrica, cfg: Config, resultado: clientes.Historial, person
     if elemento.tipo == "llamada":
         if elemento.enlace_plataforma:
             st.link_button("Abrir en CloudTalk", elemento.enlace_plataforma)
+        reproductor(audio, elemento.id, cfg.audio_retencion_dias)
     else:
         st.link_button(
             "Abrir en Chatwoot",

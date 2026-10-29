@@ -15,6 +15,10 @@ CLOUDTALK_AI_BASE_URL_POR_DEFECTO = "https://api.cloudtalk.io/v1"
 DRIVER_POSTGRES = "postgresql+psycopg"
 _ESQUEMAS_POSTGRES = ("postgres", "postgresql")
 
+ALMACENES = ("", "local", "sftp")
+SFTP_PUERTO_POR_DEFECTO = 22
+AUDIO_RETENCION_DIAS_POR_DEFECTO = 90
+
 SYNC_INTERVALO_MINUTOS_POR_DEFECTO = 15
 SYNC_DIAS_INICIALES_POR_DEFECTO = 30
 CHATWOOT_DIAS_RELECTURA_POR_DEFECTO = 14
@@ -61,6 +65,16 @@ class Config(BaseModel):
     # Las conversaciones cambian después de creadas (se resuelven, se
     # reasignan), así que cada ciclo relee las de estos últimos días.
     chatwoot_dias_relectura: int = CHATWOOT_DIAS_RELECTURA_POR_DEFECTO
+    # Almacén de los MP3 escuchados: vacío (no se guardan), «local» (una
+    # carpeta en DATA_DIR, para desarrollo) o «sftp» (el hosting).
+    almacen_tipo: str = ""
+    ftp_host: str = ""
+    ftp_port: int = SFTP_PUERTO_POR_DEFECTO
+    ftp_user: str = ""
+    ftp_password: str = ""
+    ftp_dir: str = "/"
+    sftp_huella_host: str = ""
+    audio_retencion_dias: int = AUDIO_RETENCION_DIAS_POR_DEFECTO
 
     @property
     def cloudtalk_configurado(self) -> bool:
@@ -95,6 +109,41 @@ def _entero_positivo(entorno: Mapping[str, str], nombre: str, defecto: int) -> i
     if valor < 1:
         raise ConfigError(f"{nombre} debe ser un número entero mayor que cero, se recibió: {bruto!r}")
     return valor
+
+
+def _almacen(entorno: Mapping[str, str]) -> dict:
+    tipo = (entorno.get("ALMACEN_TIPO") or "").strip().lower()
+    if tipo not in ALMACENES:
+        raise ConfigError(
+            f"ALMACEN_TIPO debe ser «local» o «sftp» (o quedar vacío), se recibió: {tipo!r}"
+        )
+    datos = {
+        "almacen_tipo": tipo,
+        "ftp_host": (entorno.get("FTP_HOST") or "").strip(),
+        "ftp_port": _entero_positivo(entorno, "FTP_PORT", SFTP_PUERTO_POR_DEFECTO),
+        "ftp_user": (entorno.get("FTP_USER") or "").strip(),
+        # La clave no se recorta: un espacio puede ser parte de ella.
+        "ftp_password": entorno.get("FTP_PASSWORD") or "",
+        "ftp_dir": (entorno.get("FTP_DIR") or "/").strip() or "/",
+        "sftp_huella_host": (entorno.get("SFTP_HUELLA_HOST") or "").strip(),
+        "audio_retencion_dias": _entero_positivo(
+            entorno, "AUDIO_RETENCION_DIAS", AUDIO_RETENCION_DIAS_POR_DEFECTO
+        ),
+    }
+    if tipo == "sftp":
+        requeridas = {
+            "FTP_HOST": datos["ftp_host"],
+            "FTP_USER": datos["ftp_user"],
+            "FTP_PASSWORD": datos["ftp_password"],
+            "SFTP_HUELLA_HOST": datos["sftp_huella_host"],
+        }
+        faltantes = [nombre for nombre, valor in requeridas.items() if not valor]
+        if faltantes:
+            raise ConfigError(
+                "Con ALMACEN_TIPO=sftp faltan: " + ", ".join(faltantes)
+                + ". La huella se obtiene con «python -m panel.audio.huella HOST PUERTO»."
+            )
+    return datos
 
 
 def cargar_config(entorno: Mapping[str, str]) -> Config:
@@ -146,6 +195,7 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
         chatwoot_dias_relectura=_entero_positivo(
             entorno, "CHATWOOT_DIAS_RELECTURA", CHATWOOT_DIAS_RELECTURA_POR_DEFECTO
         ),
+        **_almacen(entorno),
     )
 
 
@@ -157,3 +207,7 @@ def ruta_asesores(cfg: Config) -> Path:
 
 def ruta_cache(cfg: Config) -> Path:
     return cfg.data_dir / "cache"
+
+
+def ruta_audios_locales(cfg: Config) -> Path:
+    return cfg.data_dir / "audios"
