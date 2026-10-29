@@ -24,7 +24,9 @@ no permite:
 - Base de datos PostgreSQL con personas, cuentas, franjas, clientes, llamadas,
   conversaciones y auditorías.
 - Sincronización periódica de CloudTalk, Ringover y Chatwoot hacia la base.
-- Asignación de cada llamada y conversación a la persona real según la franja.
+- Asignación de cada llamada y conversación a la persona real, con estrategias
+  intercambiables por cuenta. La primera: un asesor tiene horario fijo y todo lo
+  que cae fuera es del otro.
 - Traza por número de teléfono del cliente.
 - Escucha de grabaciones bajo demanda, con guardado en MP3 en el FTP de las
   llamadas escuchadas.
@@ -48,6 +50,7 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 | Interfaz | Streamlit (se mantiene) | Se reutiliza lo existente; alcanza para un equipo interno |
 | CSV | Solo como **descarga**; nada se guarda en CSV | `asesores.csv` se migra a la base una vez y deja de usarse |
 | Zona horaria de las franjas | `Europe/Madrid` | Los turnos se definen en hora de España |
+| Cuentas compartidas | Patrón **Strategy**: cada cuenta tiene una regla con su estrategia de asignación | Hay distintas formas de repartir una cuenta; la primera es «uno fijo y el resto al otro» |
 | Almacenamiento de fechas | `timestamptz` en UTC | La zona se aplica solo al mostrar o al evaluar franjas |
 | País por defecto de los teléfonos | España (`+34`) | La mayoría de las llamadas son en España |
 | Normalización de teléfonos | Librería `phonenumbers`, formato E.164 | Evita reglas a mano por país |
@@ -101,8 +104,7 @@ app/
   esquemas/            # modelos Pydantic de entrada/salida
   clientes/            # chatwoot.py, ringover.py, cloudtalk.py (los actuales)
   servicios/
-    personas.py        # personas, cuentas, franjas
-    asignacion.py      # llamada/conversación → persona
+    personas.py        # personas y cuentas
     telefonos.py       # normalización
     clientes.py        # historial por número
     audio.py           # flujo de escucha y guardado
@@ -112,6 +114,14 @@ app/
   audio/
     conversion.py      # WAV → MP3 con ffmpeg
     almacen_ftp.py     # subir, bajar, existe
+  asignacion/
+    base.py            # interfaz EstrategiaAsignacion y esquemas
+    registro.py        # nombre → estrategia
+    servicio.py        # contexto: regla vigente, manual, reasignación
+    estrategias/
+      dueno_unico.py
+      fijo_y_resto.py
+      franjas_completas.py
   transcripcion/
     base.py            # interfaz EstrategiaTranscripcion y esquemas
     registro.py        # nombre → estrategia; elige según configuración
@@ -136,32 +146,34 @@ Sus pruebas se conservan.
 ### 5.2 Modelo de datos
 
 ```
-usuarios ─────────────┐
-                      │ auditor
-personas ──┬── franjas ──┐                 fichas ── criterios
-  │        │             │                    │          │
-  │     cuentas ─────────┘                    │          │
-  │        │                                  │          │
-  │        ├── llamadas ──────┬── auditorias ─┘── puntajes
-  │        │                  │
-  │        └── conversaciones ┘
-  │                  │
-  └── (persona asignada en llamadas y conversaciones)
+cuentas ── reglas_asignacion (estrategia + parámetros, con vigencia)
+   │               │ nombra personas
+   │            personas
+   │               │ persona asignada
+   ├── llamadas ───┼──── transcripciones
+   │               │
+   └── conversaciones
+           │
+clientes ──┘ (por teléfono, también ligado a llamadas)
 
-clientes ── llamadas / conversaciones (por teléfono)
+fichas ── criterios
+   │          │
+auditorias ── puntajes      (auditoría → llamada o conversación,
+   │                          persona auditada y usuario auditor)
+usuarios
 ```
 
 | Tabla | Campos principales | Notas |
 |---|---|---|
 | `usuarios` | id, usuario, nombre, hash_contraseña, rol, activo | Roles: `admin`, `auditor`, `supervisor` (sección 5.9) |
 | `personas` | id, nombre, correo, área (`Comercial`/`RDC`), activa | El asesor real; reemplaza a `asesores.csv` |
-| `cuentas` | id, plataforma (`cloudtalk`/`ringover`/`chatwoot`), id_externo, nombre, correo, compartida, persona_id | Si no es compartida, `persona_id` es su único dueño |
-| `franjas` | id, cuenta_id, persona_id, día_semana (0–6), hora_inicio, hora_fin, vigente_desde, vigente_hasta | Horas en `Europe/Madrid`. Sin superposición por cuenta (restricción `EXCLUDE` de Postgres) |
+| `cuentas` | id, plataforma (`cloudtalk`/`ringover`/`chatwoot`), id_externo, nombre, correo | Se crean solas desde `sync` |
+| `reglas_asignacion` | id, cuenta_id, estrategia (`dueno_unico`/`fijo_y_resto`/`franjas_completas`…), parámetros (JSONB), vigente_desde, vigente_hasta | Parámetros validados con el modelo Pydantic de la estrategia; horas en `Europe/Madrid`. Una sola regla vigente por cuenta a la vez (restricción `EXCLUDE` de Postgres). Sección 5.3 |
 | `clientes` | id, teléfono_e164, teléfono_original, nombre, revisar | `revisar` marca números que no se pudieron normalizar |
-| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`franja`/`dueño`/`manual`/`sin_asignar`), inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, transcripción_principal_id | Único por (plataforma, id_externo) |
+| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`automática`/`manual`/`sin_asignar`), regla_id, motivo_asignación, inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, transcripción_principal_id | Único por (plataforma, id_externo) |
 | `transcripciones` | id, llamada_id, proveedor, modelo, idioma, segmentos (JSONB), texto, duración_audio, costo_estimado, creado_en | Una llamada puede tener varias (por ejemplo, para comparar proveedores); una es la principal |
 | `trabajos_transcripcion` | id, llamada_id, proveedor, estado (`pendiente`/`en_proceso`/`hecho`/`error`), intentos, error, pedido_por | Cola que procesa `sync` (sección 5.7) |
-| `conversaciones` | id, id_externo, inbox, cuenta_id, cliente_id, persona_id, asignación, inicio, cierre, estado, etiquetas, dirección, área | Los mensajes se guardan aparte o en JSONB |
+| `conversaciones` | id, id_externo, inbox, cuenta_id, cliente_id, persona_id, asignación, regla_id, motivo_asignación, inicio, cierre, estado, etiquetas, dirección, área | Los mensajes se guardan aparte o en JSONB |
 | `fichas` | id, nombre, versión, activa | Las fichas se versionan: una auditoría vieja conserva su ficha |
 | `criterios` | id, ficha_id, nombre, descripción, peso, puntaje_máx, crítico | Un criterio crítico en cero anula la nota |
 | `auditorias` | id, ficha_id, llamada_id o conversación_id, persona_id, auditor_id, fecha, nota_final, comentario, estado (`borrador`/`cerrada`) | `persona_id` se copia al cerrar: si luego se reasigna la llamada, la auditoría no cambia |
@@ -169,20 +181,99 @@ clientes ── llamadas / conversaciones (por teléfono)
 
 Todas las tablas llevan `creado_en` y `actualizado_en`.
 
-### 5.3 Asignación a la persona real
+### 5.3 Asignación a la persona real (patrón Strategy)
 
-Función pura `asignar(cuenta, inicio_utc, franjas) -> (persona_id, tipo)`:
+Cada cuenta tiene una **regla de asignación**: qué estrategia usa para decidir
+quién atendió cada llamada o conversación, y con qué parámetros. Como en la
+transcripción, todas las estrategias implementan la misma interfaz, así que
+sumar una forma nueva de repartir no toca el resto del código.
 
-1. Si la llamada tiene una asignación `manual`, no se toca nunca.
-2. Si la cuenta no es compartida, se asigna a su dueño (`dueño`).
-3. Si es compartida, `inicio_utc` se convierte a `Europe/Madrid` y se busca la
-   franja vigente de esa cuenta que contenga ese día y esa hora (`franja`).
-4. Si no hay franja, queda `sin_asignar`.
+```
+              ServicioAsignacion (contexto)
+              respeta lo manual · busca la regla vigente · guarda
+                              │ usa
+              «interfaz» EstrategiaAsignacion
+              asignar(interaccion, regla) -> ResultadoAsignacion
+       ┌──────────────┬───────────────────┬──────────────────┐
+  DuenoUnico     FijoYResto          FranjasCompletas     (futuras)
+```
 
-Cuando se crea o edita una franja, se reasignan las llamadas de esa cuenta en
-el período afectado que no sean `manual`. Las pruebas cubren: dentro de cada
-franja, el corte entre dos franjas, los bordes exactos (inicio incluido, fin
-excluido), el cambio de vigencia y los cambios de horario de verano en España.
+**Interfaz** (`asignacion/base.py`):
+
+```python
+class InteraccionAAsignar(BaseModel):
+    cuenta_id: int
+    inicio: datetime                 # UTC
+    tipo: Literal["llamada", "conversacion"]
+
+class ResultadoAsignacion(BaseModel):
+    persona_id: int | None           # None = sin asignar
+    motivo: str                      # se muestra al auditor
+
+class EstrategiaAsignacion(Protocol, Generic[P]):
+    nombre: str
+    Parametros: type[P]              # modelo Pydantic propio de la estrategia
+    def asignar(self, interaccion: InteraccionAAsignar,
+                parametros: P) -> ResultadoAsignacion: ...
+    def validar(self, parametros: P) -> list[str]: ...  # problemas a mostrar
+```
+
+Cada estrategia define sus parámetros como un modelo Pydantic. Se guardan en
+la base como JSONB y se validan con ese modelo al leerlos y al guardarlos, así
+que una regla mal cargada no llega a usarse.
+
+**Estrategias:**
+
+| Estrategia | Parámetros | Cómo asigna |
+|---|---|---|
+| `dueno_unico` | `persona_id` | Todo a esa persona. Es la de las cuentas que no son compartidas |
+| `fijo_y_resto` ⭐ primera | `persona_fija_id`, `franjas_fijas` (día, inicio, fin), `persona_resto_id` | Si la hora cae dentro del horario de la persona fija, es de ella; **todo lo que cae fuera es de la otra persona**. Nunca deja nada sin asignar |
+| `franjas_completas` | lista de (persona, día, inicio, fin) | Cada persona tiene sus franjas; lo que no cae en ninguna queda sin asignar. Para cuando los dos horarios son fijos |
+
+Más adelante se pueden sumar otras, por ejemplo una que lea los turnos desde un
+Excel o desde un sistema de turnos, o una que use el agente que registra la
+plataforma cuando esté disponible.
+
+Ejemplo de `fijo_y_resto` para una cuenta que usan Juan (fijo) y Ana:
+
+```json
+{
+  "persona_fija_id": 12,
+  "franjas_fijas": [
+    {"dias": [0, 1, 2, 3, 4], "inicio": "08:00", "fin": "14:00"},
+    {"dias": [0, 1, 2, 3, 4], "inicio": "16:00", "fin": "19:00"}
+  ],
+  "persona_resto_id": 15
+}
+```
+
+Una llamada del martes a las 10:30 (hora de España) es de Juan; una del
+martes a las 15:00, del sábado o de las 20:00 es de Ana. El motivo queda
+guardado: «Fuera del horario fijo de Juan → Ana».
+
+**Contexto** (`asignacion/servicio.py`), común a todas las estrategias:
+
+1. Si la interacción tiene una asignación `manual`, no la toca nunca.
+2. Busca la regla de la cuenta **vigente en la fecha de la interacción**
+   (`reglas_asignacion` tiene vigencia), así que un cambio de turnos no altera
+   las llamadas anteriores.
+3. Convierte la hora de UTC a `Europe/Madrid` antes de pasarla a la
+   estrategia; las estrategias no saben de zonas horarias.
+4. Pide la estrategia al registro según `regla.estrategia`, valida los
+   parámetros, asigna y guarda la persona, la regla usada y el motivo.
+5. Si una cuenta no tiene regla, la interacción queda sin asignar y aparece en
+   la bandeja.
+
+**Reasignación.** Cuando se crea o edita una regla, se recalculan las
+interacciones de esa cuenta en su vigencia, salvo las manuales. Antes de
+guardar, el panel muestra una vista previa: «De las 340 llamadas del
+período, 210 quedan para Juan y 130 para Ana; cambian de dueño 12».
+
+**Pruebas** (funciones puras, sin base de datos), para cada estrategia:
+dentro y fuera de cada franja, el corte entre dos franjas de la misma persona,
+los bordes exactos (inicio incluido, fin excluido), fines de semana, el cambio
+de vigencia de la regla y los dos cambios de horario de verano en España. Las
+franjas no cruzan la medianoche; un turno así se carga como dos franjas.
 
 ### 5.4 Teléfonos
 
@@ -358,7 +449,7 @@ los textos lado a lado y elegir el proveedor por calidad y precio.
 
 | Rol | Puede |
 |---|---|
-| `admin` | Todo: usuarios, personas, cuentas, franjas, fichas, reabrir auditorías |
+| `admin` | Todo: usuarios, personas, cuentas, reglas de asignación, fichas, reabrir auditorías |
 | `auditor` | Escuchar llamadas, corregir asignaciones, crear y cerrar auditorías, descargar reportes |
 | `supervisor` | Ver historial, auditorías y reportes; no edita |
 
@@ -401,9 +492,9 @@ rol del usuario.
 |---|---|---|
 | **Inicio** | todos | Llamadas sin asignar, auditorías en borrador y última sincronización |
 | **Personas** | admin | Alta, baja y edición de asesores con su área (reemplaza la pestaña Asesores) |
-| **Cuentas** | admin | Cuentas de cada plataforma (se cargan solas desde `sync`); marcar compartida o elegir dueño |
-| **Franjas** | admin | Por cuenta compartida: tabla editable de persona, día, inicio, fin y vigencia. Vista semanal del horario. Avisa superposiciones y muestra cuántas llamadas se reasignarían antes de guardar |
-| **Sin asignar** | auditor | Bandeja de llamadas y chats sin persona, con asignación individual o en lote |
+| **Cuentas** | admin | Cuentas de cada plataforma (se cargan solas desde `sync`) con su regla de asignación vigente y el historial de reglas |
+| **Regla de asignación** | admin | Por cuenta: elegir la estrategia y llenar el formulario propio de esa estrategia (en `fijo_y_resto`: persona fija, sus franjas y persona del resto). Vista semanal con el horario de cada persona en colores, vigencia, y vista previa de cuántas llamadas quedan para cada uno antes de guardar |
+| **Sin asignar** | auditor | Bandeja de llamadas y chats sin persona (cuentas sin regla o con `franjas_completas`), con asignación individual o en lote. En cada llamada se ve el motivo de la asignación automática |
 | **Llamadas** | auditor, supervisor | Lista filtrable (fecha, persona, cuenta, dirección, duración, con transcripción, auditada o no). Al abrir una llamada: reproductor, transcripción, persona asignada (editable), botón «Transcribir» (con el proveedor por defecto o uno elegido) y botón «Auditar». Desde la lista se eligen varias llamadas y se transcriben en lote, viendo antes el costo estimado |
 | **Historial del cliente** | auditor, supervisor | Buscar por número. Línea de tiempo con chats y llamadas por fecha, con quién atendió cada uno. Se abre cada elemento y se audita desde ahí |
 | **Auditar** | auditor | Audio y transcripción (o mensajes del chat) a la izquierda; ficha con los criterios, puntajes y comentarios a la derecha. Guardar borrador o cerrar. Muestra la nota en vivo |
@@ -432,7 +523,7 @@ Criterios comunes a todas las páginas:
 | # | Etapa | Backend | Frontend | Resultado visible |
 |---|---|---|---|---|
 | 1 | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, modelos, servicio Postgres, migración de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
-| 2 | Asesores y franjas | Servicios de personas, cuentas y franjas; asignación con sus pruebas | Páginas Personas, Cuentas y Franjas | Se cargan los turnos |
+| 2 | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
 | 3 | Sincronización | Proceso `sync` para las tres plataformas, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
 | 5 | Audio | Grabación de CloudTalk (y de Ringover), MP3, FTP, reintentos | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
@@ -465,7 +556,8 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
 3. ¿Cuánto tiempo hay que conservar los audios en el FTP?
 4. ¿El FTP del hosting acepta FTPS? ¿Cuánto espacio tiene el plan?
 5. ¿Cuál es el endpoint de grabaciones de Ringover?
-6. ¿Alguna bandeja de Chatwoot también es compartida, y necesita franjas?
+6. ¿Alguna bandeja de Chatwoot también es compartida? Si es así, usa las mismas
+   estrategias de asignación.
 7. ¿Los roles propuestos (admin, auditor, supervisor) se ajustan al equipo?
 8. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
 9. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
