@@ -3,6 +3,9 @@
 Fecha: 2026-10-28
 Estado: propuesto
 
+Los patrones de diseño de cada parte están en
+`2026-10-29-patrones-de-diseno.md`.
+
 ## 1. Problema
 
 Hoy la aplicación genera CSV a pedido contra las APIs de Chatwoot, Ringover y
@@ -113,12 +116,15 @@ después (por ejemplo a FastAPI + React) sin reescribir el backend.
 ```
 app/
   config.py            # Settings de pydantic-settings
+  composicion.py       # raíz de composición: arma las piezas concretas
   db/
     base.py            # engine, SessionLocal, Base
     modelos.py         # tablas SQLAlchemy
     migraciones/       # Alembic
+    repositorios/      # un repositorio por agregado
   esquemas/            # modelos Pydantic de entrada/salida
   clientes/            # chatwoot.py, cloudtalk.py (los actuales)
+  fuentes/             # adaptadores FuenteLlamadas / FuenteConversaciones
   servicios/
     personas.py        # personas y cuentas
     telefonos.py       # normalización
