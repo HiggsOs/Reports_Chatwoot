@@ -6,7 +6,7 @@ Estado: propuesto
 ## 1. Problema
 
 Hoy la aplicación genera CSV a pedido contra las APIs de Chatwoot, Ringover y
-CloudTalk. No guarda nada salvo `asesores.csv` y una caché de archivos, así que
+CloudTalk. El panel nuevo usa solo Chatwoot y CloudTalk. No guarda nada salvo `asesores.csv` y una caché de archivos, así que
 no permite:
 
 - Escuchar una llamada desde el panel.
@@ -21,9 +21,9 @@ no permite:
 
 **Incluye:**
 
-- Base de datos PostgreSQL con personas, cuentas, franjas, clientes, llamadas,
-  conversaciones y auditorías.
-- Sincronización periódica de CloudTalk, Ringover y Chatwoot hacia la base.
+- Base de datos PostgreSQL con personas, cuentas, reglas de asignación,
+  clientes, llamadas, conversaciones y auditorías.
+- Sincronización periódica de CloudTalk y Chatwoot hacia la base.
 - Asignación de cada llamada y conversación a la persona real, con estrategias
   intercambiables por cuenta. La primera: un asesor tiene horario fijo y todo lo
   que cae fuera es del otro.
@@ -34,16 +34,27 @@ no permite:
   proveedores intercambiables: OpenAI, Alibaba y otros.
 - Fichas de auditoría configurables, pantalla de auditoría y reporte
   descargable.
-- Varios usuarios con rol.
+- Un único usuario administrador, como hoy.
 
-**No incluye (por ahora):** puntuar de forma automática con IA, enviar reportes por correo, ni que los asesores
-entren a ver su propia nota. La arquitectura no impide agregarlos después.
+**No incluye (por ahora):**
+
+- **Ringover.** El panel nuevo trabaja solo con CloudTalk. La pestaña de
+  Ringover que existe hoy no se toca mientras dure la transición; se retira
+  cuando se decida.
+- **Usuarios con roles.** Todo se maneja con el usuario administrador.
+- Puntuar de forma automática con IA, enviar reportes por correo, o que los
+  asesores entren a ver su propia nota.
+
+ La arquitectura no impide agregar nada de esto después.
 
 ## 3. Decisiones tomadas
 
 | Decisión | Elección | Motivo |
 |---|---|---|
-| Base de datos | PostgreSQL | Varios usuarios escribiendo a la vez; EasyPanel lo levanta como servicio |
+| Base de datos | PostgreSQL | El panel y el proceso `sync` escriben a la vez; EasyPanel lo levanta como servicio |
+| Plataforma de llamadas | Solo CloudTalk | Ringover no se usa en el panel nuevo |
+| Asignación en Chatwoot | Por el usuario de Chatwoot asignado a la conversación | Todas las bandejas son compartidas, así que la bandeja no dice quién atendió |
+| Usuarios del panel | Un solo administrador (el login actual) | No se necesitan roles por ahora |
 | ORM | SQLAlchemy 2.x (estilo tipado `Mapped[...]`) | Estándar en Python; separa el modelo de la consulta |
 | Migraciones | Alembic | Acompaña a SQLAlchemy; el esquema evoluciona sin perder datos |
 | Validación y tipos | Pydantic v2 | Esquemas de entrada y salida, y configuración por variables de entorno (`pydantic-settings`) |
@@ -55,7 +66,8 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 | País por defecto de los teléfonos | España (`+34`) | La mayoría de las llamadas son en España |
 | Normalización de teléfonos | Librería `phonenumbers`, formato E.164 | Evita reglas a mano por país |
 | Audio | Mixto: bajo demanda; se guarda en MP3 lo que se escucha | Poco espacio y la evidencia de cada auditoría queda guardada |
-| Retención de audios | 3 meses desde la fecha de la llamada | La transcripción y la auditoría quedan para siempre en la base |
+| Retención de audios | 3 meses desde la fecha de la llamada | Alcanza para auditar y reclamar una nota |
+| Retención de transcripciones | 3 años desde la fecha de la llamada | Plazo definido por la empresa; las auditorías se conservan |
 | Almacén de audio | Hosting contratado (Plesk) por **SFTP** en el puerto 8023; FTPS como alternativa | Ya está pago por un año; SFTP usa un solo puerto cifrado y evita los problemas de FTPS con conexiones pasivas y reutilización de sesión TLS |
 | Acceso al almacén | Interfaz `AlmacenAudio` con implementaciones `sftp`, `ftps` y `local` | Cambiar de servidor al vencer el año (u otro destino, como S3) es cambiar la configuración |
 | Rutas de audio | Relativas al directorio del FTP | Permite cambiar de servidor sin tocar la base |
@@ -73,7 +85,7 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 ┌───────────────┴──────────────── Backend ──────────────────┐
 │ servicios/   lógica de negocio, recibe y devuelve Pydantic │
 │ db/          modelos SQLAlchemy, sesión, Alembic           │
-│ clientes/    chatwoot.py, ringover.py, cloudtalk.py        │
+│ clientes/    chatwoot.py, cloudtalk.py                     │
 │ audio/       conversión a MP3 y almacén (SFTP/FTPS/local)  │
 │ transcripcion/ estrategias por proveedor (OpenAI, Alibaba…)│
 │ sync/        proceso aparte que llena la base y transcribe │
@@ -104,7 +116,7 @@ app/
     modelos.py         # tablas SQLAlchemy
     migraciones/       # Alembic
   esquemas/            # modelos Pydantic de entrada/salida
-  clientes/            # chatwoot.py, ringover.py, cloudtalk.py (los actuales)
+  clientes/            # chatwoot.py, cloudtalk.py (los actuales)
   servicios/
     personas.py        # personas y cuentas
     telefonos.py       # normalización
@@ -112,7 +124,7 @@ app/
     audio.py           # flujo de escucha y guardado
     auditorias.py      # fichas, auditorías, puntajes
     reportes.py        # armado de reportes y exportación
-    usuarios.py        # usuarios del panel y roles
+    retencion.py       # borrado de audios (3 meses) y transcripciones (3 años)
   audio/
     conversion.py      # WAV → MP3 con ffmpeg
     almacen.py         # interfaz AlmacenAudio: subir, bajar, existe, borrar, listar
@@ -138,15 +150,15 @@ app/
   sync/
     __main__.py        # bucle del proceso de sincronización
     cloudtalk.py
-    ringover.py
     chatwoot.py
   ui/                  # frontend (sección 6)
 tests/
 ```
 
-Los módulos actuales (`chatwoot.py`, `ringover.py`, `cloudtalk.py` y los
-`reporte_*.py`) se mueven a `clientes/` y `servicios/` sin cambiar su lógica.
-Sus pruebas se conservan.
+Los módulos actuales de Chatwoot y CloudTalk (`chatwoot.py`, `cloudtalk.py`,
+`reporte.py`, `reporte_cloudtalk.py`) se mueven a `clientes/` y `servicios/`
+sin cambiar su lógica, y sus pruebas se conservan. `ringover.py` y
+`reporte_ringover.py` quedan donde están, solo para la pestaña actual.
 
 ### 5.2 Modelo de datos
 
@@ -164,24 +176,22 @@ clientes ──┘ (por teléfono, también ligado a llamadas)
 fichas ── criterios
    │          │
 auditorias ── puntajes      (auditoría → llamada o conversación,
-   │                          persona auditada y usuario auditor)
-usuarios
+                              y persona auditada)
 ```
 
 | Tabla | Campos principales | Notas |
 |---|---|---|
-| `usuarios` | id, usuario, nombre, hash_contraseña, rol, activo | Roles: `admin`, `auditor`, `supervisor` (sección 5.9) |
 | `personas` | id, nombre, correo, área (`Comercial`/`RDC`), activa | El asesor real; reemplaza a `asesores.csv` |
-| `cuentas` | id, plataforma (`cloudtalk`/`ringover`/`chatwoot`), id_externo, nombre, correo | Se crean solas desde `sync` |
+| `cuentas` | id, plataforma (`cloudtalk`/`chatwoot`), id_externo, nombre, correo | Se crean solas desde `sync`. En CloudTalk, el agente; en Chatwoot, el usuario (agente) |
 | `reglas_asignacion` | id, cuenta_id, estrategia (`dueno_unico`/`fijo_y_resto`/`franjas_completas`…), parámetros (JSONB), vigente_desde, vigente_hasta | Parámetros validados con el modelo Pydantic de la estrategia; horas en `Europe/Madrid`. Una sola regla vigente por cuenta a la vez (restricción `EXCLUDE` de Postgres). Sección 5.3 |
 | `clientes` | id, teléfono_e164, teléfono_original, nombre, revisar | `revisar` marca números que no se pudieron normalizar |
-| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`automática`/`manual`/`sin_asignar`), regla_id, motivo_asignación, inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, transcripción_principal_id | Único por (plataforma, id_externo) |
-| `transcripciones` | id, llamada_id, proveedor, modelo, idioma, segmentos (JSONB), texto, duración_audio, costo_estimado, creado_en | Una llamada puede tener varias (por ejemplo, para comparar proveedores); una es la principal |
+| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`automática`/`manual`/`sin_asignar`), regla_id, motivo_asignación, inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, transcripción_principal_id, transcripcion_estado | Único por (plataforma, id_externo) |
+| `transcripciones` | id, llamada_id, proveedor, modelo, idioma, segmentos (JSONB), texto, duración_audio, costo_estimado, creado_en | Una llamada puede tener varias (por ejemplo, para comparar proveedores); una es la principal. Se borran a los 3 años (sección 5.6) |
 | `trabajos_transcripcion` | id, llamada_id, proveedor, estado (`pendiente`/`en_proceso`/`hecho`/`error`), intentos, error, pedido_por | Cola que procesa `sync` (sección 5.7) |
-| `conversaciones` | id, id_externo, inbox, cuenta_id, cliente_id, persona_id, asignación, regla_id, motivo_asignación, inicio, cierre, estado, etiquetas, dirección, área | Los mensajes se guardan aparte o en JSONB |
+| `conversaciones` | id, id_externo, inbox (solo informativo), cuenta_id (el usuario asignado), cliente_id, persona_id, asignación, regla_id, motivo_asignación, inicio, cierre, estado, etiquetas, dirección, área | Los mensajes se guardan aparte o en JSONB |
 | `fichas` | id, nombre, versión, activa | Las fichas se versionan: una auditoría vieja conserva su ficha |
 | `criterios` | id, ficha_id, nombre, descripción, peso, puntaje_máx, crítico | Un criterio crítico en cero anula la nota |
-| `auditorias` | id, ficha_id, llamada_id o conversación_id, persona_id, auditor_id, fecha, nota_final, comentario, estado (`borrador`/`cerrada`) | `persona_id` se copia al cerrar: si luego se reasigna la llamada, la auditoría no cambia |
+| `auditorias` | id, ficha_id, llamada_id o conversación_id, persona_id, fecha, nota_final, comentario, estado (`borrador`/`cerrada`) | `persona_id` se copia al cerrar: si luego se reasigna la llamada, la auditoría no cambia |
 | `puntajes` | auditoría_id, criterio_id, puntaje, comentario | |
 
 Todas las tablas llevan `creado_en` y `actualizado_en`.
@@ -234,6 +244,16 @@ que una regla mal cargada no llega a usarse.
 | `dueno_unico` | `persona_id` | Todo a esa persona. Es la de las cuentas que no son compartidas |
 | `fijo_y_resto` ⭐ primera | `persona_fija_id`, `franjas_fijas` (día, inicio, fin), `persona_resto_id` | Si la hora cae dentro del horario de la persona fija, es de ella; **todo lo que cae fuera es de la otra persona**. Nunca deja nada sin asignar |
 | `franjas_completas` | lista de (persona, día, inicio, fin) | Cada persona tiene sus franjas; lo que no cae en ninguna queda sin asignar. Para cuando los dos horarios son fijos |
+
+**Chatwoot.** Todas las bandejas son compartidas, así que la bandeja no sirve
+para separar. La cuenta es el **usuario de Chatwoot asignado a la
+conversación**, y cada una usa `dueno_unico` hacia su persona. Cuando `sync`
+encuentra un usuario nuevo de Chatwoot cuyo correo coincide con el de una
+persona, crea esa regla solo; si no coincide, la cuenta queda sin regla y sus
+conversaciones van a *Sin asignar*. Una conversación sin usuario asignado
+también queda *Sin asignar*. Si en el futuro un usuario de Chatwoot se
+comparte entre dos personas, se le asigna `fijo_y_resto` como a una cuenta de
+CloudTalk.
 
 Más adelante se pueden sumar otras, por ejemplo una que lea los turnos desde un
 Excel o desde un sistema de turnos, o una que use el agente que registra la
@@ -289,7 +309,6 @@ se puede interpretar, se guardan solo los dígitos y se marca `revisar`.
 Origen del teléfono del cliente:
 
 - CloudTalk: `Contact.contact_numbers` del historial de llamadas.
-- Ringover: número de origen o de destino de `GET /calls`, según la dirección.
 - Chatwoot: `meta.sender.phone_number` de la conversación.
 
 ### 5.5 Sincronización (`sync`)
@@ -302,13 +321,14 @@ Proceso aparte que corre cada N minutos (`SYNC_INTERVALO_MINUTOS`):
   duplica nada.
 - CloudTalk: historial de llamadas (con `recording_link` para saber cuáles
   tienen grabación). Respeta el límite de 60 peticiones por minuto, como hoy.
-- Ringover: `GET /calls` (dirección, número y grabación).
 - Procesa la cola de transcripciones (sección 5.7).
-- Chatwoot: conversaciones con su asesor, inbox, etiquetas y teléfono.
+- Chatwoot: conversaciones con el usuario asignado, inbox, etiquetas y
+  teléfono. Se crea o actualiza la cuenta de cada usuario de Chatwoot.
 - Después de guardar, aplica la asignación (5.3) y la traza por teléfono (5.4).
 - Un bloqueo en Postgres (`pg_advisory_lock`) impide que corran dos ciclos a
   la vez.
 - Hay una tarea aparte para cargar datos históricos de un rango a elección.
+- Una vez al día aplica la retención (sección 5.6).
 
 La caché de archivos actual (`DATA_DIR/cache`) deja de ser necesaria.
 
@@ -336,13 +356,13 @@ y se prueba que el servidor acepte la conexión de datos sin reutilizar la
 sesión TLS, porque `ftplib` no la reutiliza y ProFTPD suele exigirla. El FTP
 sin cifrar no se usa.
 
-**Retención: 3 meses** (`AUDIO_RETENCION_DIAS=90`), contados desde la fecha
-de la llamada. Una vez al día, `sync` borra del FTP los MP3 vencidos y marca
+**Retención de audios: 3 meses** (`AUDIO_RETENCION_DIAS=90`), contados desde
+la fecha de la llamada. Una vez al día, `sync` borra del FTP los MP3 vencidos y marca
 la llamada como `audio_estado = eliminado_por_retencion`. Lo que se conserva
 en la base después de ese plazo:
 
-- La transcripción, las auditorías con sus puntajes y comentarios, y los
-  datos de la llamada: el reporte histórico no pierde nada.
+- La transcripción (hasta cumplir 3 años), las auditorías con sus puntajes y
+  comentarios, y los datos de la llamada: el reporte histórico no pierde nada.
 - No se borra un audio con una auditoría en `borrador`; se borra cuando la
   auditoría se cierra, si ya pasó el plazo.
 
@@ -359,7 +379,16 @@ liberar.
 botón «Abrir en CloudTalk». Solo se pide audio a CloudTalk cuando ese enlace
 existe, para no gastar peticiones en llamadas sin grabación.
 
-El endpoint de grabaciones de Ringover está pendiente de confirmar.
+**Retención de transcripciones: 3 años** (`TRANSCRIPCION_RETENCION_DIAS=1095`),
+contados desde la fecha de la llamada. La misma tarea diaria borra las filas de
+`transcripciones` vencidas (texto y segmentos) y marca la llamada como
+`transcripcion_estado = eliminada_por_retencion`. Las auditorías no se
+borran: su nota, sus puntajes y sus comentarios siguen en los reportes. La
+llamada vencida no se vuelve a transcribir sola; el botón «Transcribir» queda
+desactivado si ya no hay audio en ninguna parte.
+
+Las pruebas de retención usan fechas fijas en los dos bordes: día 90 / 91
+para los audios y día 1095 / 1096 para las transcripciones.
 
 ### 5.7 Transcripción (patrón Strategy)
 
@@ -469,7 +498,8 @@ los textos lado a lado y elegir el proveedor por calidad y precio.
 
 - Nota final = suma de (puntaje / máximo × peso) / suma de pesos × 100, salvo
   que un criterio crítico esté en cero, en cuyo caso la nota es 0.
-- Una auditoría `cerrada` no se edita; solo un `admin` puede reabrirla.
+- Una auditoría `cerrada` no se edita; se puede reabrir con una confirmación,
+  y queda registrado cuándo.
 - Reportes (todos con filtros de período, área y persona):
   - Detalle: una fila por auditoría con sus puntajes por criterio.
   - Resumen por persona: cantidad de auditorías, nota promedio, promedio por
@@ -477,17 +507,12 @@ los textos lado a lado y elegir el proveedor por calidad y precio.
   - Exportación en Excel (`openpyxl`, una hoja por reporte) y CSV. El PDF
     queda como opcional.
 
-### 5.9 Usuarios y roles
+### 5.9 Acceso
 
-| Rol | Puede |
-|---|---|
-| `admin` | Todo: usuarios, personas, cuentas, reglas de asignación, fichas, reabrir auditorías |
-| `auditor` | Escuchar llamadas, corregir asignaciones, crear y cerrar auditorías, descargar reportes |
-| `supervisor` | Ver historial, auditorías y reportes; no edita |
-
-El login sigue con `streamlit-authenticator`, pero los usuarios salen de la
-tabla `usuarios`. El usuario actual de las variables de entorno se crea como
-`admin` en el primer arranque.
+Un solo usuario administrador con el login actual (`APP_USERNAME`,
+`APP_PASSWORD_HASH`), que ve y edita todo. No hay tabla de usuarios ni roles.
+Si más adelante se necesitan, se agregan sin tocar el resto: las auditorías
+solo sumarían quién las hizo.
 
 ### 5.10 Configuración nueva
 
@@ -500,6 +525,7 @@ tabla `usuarios`. El usuario actual de las variables de entorno se crea como
 | `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al servidor; con SFTP, `FTP_PORT=8023` |
 | `SFTP_HUELLA_HOST` | Huella de la clave del servidor SFTP, para verificar que es el servidor correcto |
 | `AUDIO_RETENCION_DIAS` | `90` |
+| `TRANSCRIPCION_RETENCION_DIAS` | `1095` |
 | `SYNC_INTERVALO_MINUTOS` | Frecuencia de la sincronización |
 | `TRANSCRIPCION_PROVEEDOR` | Estrategia por defecto: `openai`, `alibaba`, `falsa`… |
 | `TRANSCRIPCION_RESPALDO` | Estrategias a probar si falla la principal, separadas por coma |
@@ -519,25 +545,24 @@ Postgres de servicio en CI.
 
 ## 6. Frontend (Streamlit)
 
-Aplicación multipágina con `st.navigation`; cada página se muestra según el
-rol del usuario.
+Aplicación multipágina con `st.navigation`. Todas las páginas las usa el
+administrador.
 
-| Página | Rol | Contenido |
-|---|---|---|
-| **Inicio** | todos | Llamadas sin asignar, auditorías en borrador y última sincronización |
-| **Personas** | admin | Alta, baja y edición de asesores con su área (reemplaza la pestaña Asesores) |
-| **Cuentas** | admin | Cuentas de cada plataforma (se cargan solas desde `sync`) con su regla de asignación vigente y el historial de reglas |
-| **Regla de asignación** | admin | Por cuenta: elegir la estrategia y llenar el formulario propio de esa estrategia (en `fijo_y_resto`: persona fija, sus franjas y persona del resto). Vista semanal con el horario de cada persona en colores, vigencia, y vista previa de cuántas llamadas quedan para cada uno antes de guardar |
-| **Sin asignar** | auditor | Bandeja de llamadas y chats sin persona (cuentas sin regla o con `franjas_completas`), con asignación individual o en lote. En cada llamada se ve el motivo de la asignación automática |
-| **Llamadas** | auditor, supervisor | Lista filtrable (fecha, persona, cuenta, dirección, duración, con transcripción, auditada o no). Al abrir una llamada: reproductor, transcripción, persona asignada (editable), botón «Transcribir» (con el proveedor por defecto o uno elegido) y botón «Auditar». Desde la lista se eligen varias llamadas y se transcriben en lote, viendo antes el costo estimado |
-| **Historial del cliente** | auditor, supervisor | Buscar por número. Línea de tiempo con chats y llamadas por fecha, con quién atendió cada uno. Se abre cada elemento y se audita desde ahí |
-| **Auditar** | auditor | Audio y transcripción (o mensajes del chat) a la izquierda; ficha con los criterios, puntajes y comentarios a la derecha. Guardar borrador o cerrar. Muestra la nota en vivo |
-| **Auditorías** | auditor, supervisor | Lista de auditorías con filtros; abrir una muestra el detalle y el audio guardado (o, pasados los 3 meses, el aviso de que ya no está y la transcripción) |
-| **Reportes** | auditor, supervisor | Elegir período, área y persona; ver la tabla y un gráfico de evolución; descargar Excel o CSV |
-| **Fichas** | admin | Crear y editar fichas y criterios (nombre, peso, puntaje máximo, crítico). Editar una ficha en uso crea una versión nueva |
-| **Usuarios** | admin | Alta de usuarios del panel, rol y contraseña |
-| **Transcripción** | admin | Proveedor por defecto y de respaldo, estado de la cola (pendientes, errores con reintento), gasto del mes por proveedor y comparación lado a lado de dos transcripciones de la misma llamada |
-| **Exportar datos** | auditor, supervisor | Los tres CSV de hoy (Chatwoot, Ringover y CloudTalk), ahora leídos de la base |
+| Página | Contenido |
+|---|---|
+| **Inicio** | Llamadas sin asignar, auditorías en borrador y última sincronización |
+| **Personas** | Alta, baja y edición de asesores con su área (reemplaza la pestaña Asesores) |
+| **Cuentas** | Agentes de CloudTalk y usuarios de Chatwoot (se cargan solos desde `sync`) con su regla de asignación vigente y el historial de reglas |
+| **Regla de asignación** | Por cuenta: elegir la estrategia y llenar el formulario propio de esa estrategia (en `fijo_y_resto`: persona fija, sus franjas y persona del resto). Vista semanal con el horario de cada persona en colores, vigencia, y vista previa de cuántas llamadas quedan para cada uno antes de guardar |
+| **Sin asignar** | Bandeja de llamadas y chats sin persona (cuentas sin regla, conversaciones de Chatwoot sin usuario asignado o cuentas con `franjas_completas`), con asignación individual o en lote. En cada llamada se ve el motivo de la asignación automática |
+| **Llamadas** | Lista filtrable (fecha, persona, cuenta, dirección, duración, con transcripción, auditada o no). Al abrir una llamada: reproductor, transcripción, persona asignada (editable), botón «Transcribir» (con el proveedor por defecto o uno elegido) y botón «Auditar». Desde la lista se eligen varias llamadas y se transcriben en lote, viendo antes el costo estimado |
+| **Historial del cliente** | Buscar por número. Línea de tiempo con chats y llamadas por fecha, con quién atendió cada uno. Se abre cada elemento y se audita desde ahí |
+| **Auditar** | Audio y transcripción (o mensajes del chat) a la izquierda; ficha con los criterios, puntajes y comentarios a la derecha. Guardar borrador o cerrar. Muestra la nota en vivo |
+| **Auditorías** | Lista de auditorías con filtros; abrir una muestra el detalle y el audio guardado (o, pasados los 3 meses, el aviso de que ya no está y la transcripción; pasados los 3 años, solo la nota y los comentarios) |
+| **Reportes** | Elegir período, área y persona; ver la tabla y un gráfico de evolución; descargar Excel o CSV |
+| **Fichas** | Crear y editar fichas y criterios (nombre, peso, puntaje máximo, crítico). Editar una ficha en uso crea una versión nueva |
+| **Transcripción** | Proveedor por defecto y de respaldo, estado de la cola (pendientes, errores con reintento), gasto del mes por proveedor y comparación lado a lado de dos transcripciones de la misma llamada |
+| **Exportar datos** | Los CSV de Chatwoot y CloudTalk de hoy, ahora leídos de la base |
 
 Criterios comunes a todas las páginas:
 
@@ -558,12 +583,12 @@ Criterios comunes a todas las páginas:
 |---|---|---|---|---|
 | 1 | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, modelos, servicio Postgres, migración de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
 | 2 | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
-| 3 | Sincronización | Proceso `sync` para las tres plataformas, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
+| 3 | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
-| 5 | Audio | Grabación de CloudTalk (y de Ringover), MP3, FTP, reintentos | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
-| 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync` | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
+| 5 | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
+| 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync`, retención de 3 años | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
 | 7 | Auditorías | Fichas, auditorías y cálculo de nota | Fichas, Auditar y Auditorías | Se audita |
-| 8 | Reportes y usuarios | Reportes, Excel, usuarios y roles | Reportes y Usuarios | Se descarga el reporte; cada auditor tiene su usuario |
+| 8 | Reportes | Reportes y Excel | Reportes | Se descarga el reporte de auditorías |
 
 Cada etapa se entrega con pruebas y se puede desplegar por separado.
 
@@ -590,17 +615,13 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
    calidad y precio.
 3. ¿Cuánto espacio en disco tiene el plan del hosting? ¿El puerto 8023 de
    SFTP está abierto en el firewall del hosting?
-4. ¿Cuál es el endpoint de grabaciones de Ringover?
-5. ¿Alguna bandeja de Chatwoot también es compartida? Si es así, usa las mismas
-   estrategias de asignación.
-6. ¿Los roles propuestos (admin, auditor, supervisor) se ajustan al equipo?
-7. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
-8. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
+4. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
+5. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
    canales separados)? Se confirma con una grabación real; define si la
    atribución de hablantes es exacta o depende del proveedor.
-9. Protección de datos: los clientes están en España (RGPD). Enviar audio a
+6. Protección de datos: los clientes están en España (RGPD). Enviar audio a
    un proveedor externo necesita su acuerdo de tratamiento de datos y elegir
    una región adecuada (en Alibaba, la internacional o la europea si existe
    para el modelo elegido). Hay que confirmarlo antes de usar audio real.
-   Lo mismo vale para el plazo de 3 meses de los audios y para si las
-   transcripciones, que también son datos personales, necesitan un plazo.
+   Conviene también que confirme los plazos de 3 meses para los audios y 3
+   años para las transcripciones.
