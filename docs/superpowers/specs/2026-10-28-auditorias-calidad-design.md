@@ -72,6 +72,8 @@ La arquitectura no impide agregar nada de esto después.
 | Acceso al almacén | Interfaz `AlmacenAudio` con implementaciones `sftp`, `ftps` y `local` | Cambiar de servidor al vencer el año (u otro destino, como S3) es cambiar la configuración |
 | Rutas de audio | Relativas al directorio del FTP | Permite cambiar de servidor sin tocar la base |
 | Transcripción | Propia, con el patrón **Strategy**: una estrategia por proveedor | Ninguna llamada trae transcripción; se puede cambiar o comparar proveedores sin tocar el resto del código |
+| Proveedor inicial | OpenAI; Alibaba y otros quedan como estrategias posteriores | Elegido por la empresa |
+| Mono o estéreo | Se detecta en cada WAV; no se supone | CloudTalk solo garantiza WAV |
 | Cuándo transcribir | Bajo demanda al abrir una llamada, y en lote por filtros con costo estimado previo | Coherente con la estrategia mixta de audio; no se paga por llamadas que nadie audita |
 
 ## 4. Arquitectura
@@ -185,7 +187,7 @@ auditorias ── puntajes      (auditoría → llamada o conversación,
 | `cuentas` | id, plataforma (`cloudtalk`/`chatwoot`), id_externo, nombre, correo | Se crean solas desde `sync`. En CloudTalk, el agente; en Chatwoot, el usuario (agente) |
 | `reglas_asignacion` | id, cuenta_id, estrategia (`dueno_unico`/`fijo_y_resto`/`franjas_completas`…), parámetros (JSONB), vigente_desde, vigente_hasta | Parámetros validados con el modelo Pydantic de la estrategia; horas en `Europe/Madrid`. Una sola regla vigente por cuenta a la vez (restricción `EXCLUDE` de Postgres). Sección 5.3 |
 | `clientes` | id, teléfono_e164, teléfono_original, nombre, revisar | `revisar` marca números que no se pudieron normalizar |
-| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`automática`/`manual`/`sin_asignar`), regla_id, motivo_asignación, inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, transcripción_principal_id, transcripcion_estado | Único por (plataforma, id_externo) |
+| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`automática`/`manual`/`sin_asignar`), regla_id, motivo_asignación, inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, canales_audio, transcripción_principal_id, transcripcion_estado | Único por (plataforma, id_externo) |
 | `transcripciones` | id, llamada_id, proveedor, modelo, idioma, segmentos (JSONB), texto, duración_audio, costo_estimado, creado_en | Una llamada puede tener varias (por ejemplo, para comparar proveedores); una es la principal. Se borran a los 3 años (sección 5.6) |
 | `trabajos_transcripcion` | id, llamada_id, proveedor, estado (`pendiente`/`en_proceso`/`hecho`/`error`), intentos, error, pedido_por | Cola que procesa `sync` (sección 5.7) |
 | `conversaciones` | id, id_externo, inbox (solo informativo), cuenta_id (el usuario asignado), cliente_id, persona_id, asignación, regla_id, motivo_asignación, inicio, cierre, estado, etiquetas, dirección, área | Los mensajes se guardan aparte o en JSONB |
@@ -455,17 +457,40 @@ pedido se puede elegir otro. Se puede definir una cadena de respaldo
 
 1. Obtiene el audio con el flujo de la sección 5.6, así que transcribir una
    llamada también la deja guardada en el FTP.
-2. **Separa los hablantes por canal si la grabación es estéreo.** Si la
-   plataforma graba agente y cliente en canales distintos, se transcribe cada
-   canal por separado y la atribución es exacta con cualquier proveedor. Si es
-   mono, se usa la diarización del proveedor y se deduce quién es el agente
-   (por ejemplo, quien saluda con el nombre de la empresa); si no se puede,
-   queda `desconocido` y el auditor lo corrige.
+2. **Detecta los canales de cada WAV y elige el camino.** De CloudTalk solo se
+   sabe que entrega WAV, no si es mono o estéreo, así que se decide por
+   archivo y no por configuración (ver «Mono o estéreo» más abajo).
 3. Ajusta el audio a las `capacidades` de la estrategia: lo parte en trozos si
    supera el tamaño o la duración máximos y une los segmentos al final; si la
    estrategia `requiere_url`, publica el archivo en una URL temporal.
 4. Llama a la estrategia, guarda el resultado en `transcripciones` y la marca
    como principal si la llamada no tenía otra.
+
+**Mono o estéreo.** Antes de transcribir, el contexto lee la cabecera del WAV
+(con `ffprobe`, sin costo ni llamadas externas) y sigue uno de dos caminos:
+
+| Caso | Cómo se detecta | Qué se hace | Quién es el agente |
+|---|---|---|---|
+| **Estéreo real** | 2 canales con contenido distinto | Se separa cada canal y se transcribe por separado; se intercalan los segmentos por su marca de tiempo | Exacto: cada canal es una persona. Qué canal es el agente se configura (`CLOUDTALK_CANAL_AGENTE`) tras escuchar una grabación |
+| **Mono**, o estéreo con los dos canales iguales | 1 canal, o 2 canales casi idénticos (se comparan) | Se transcribe el audio completo con un modelo que separa hablantes (diarización) | El modelo devuelve hablantes `A`, `B`…; se deduce cuál es el agente y, si no se puede, queda `desconocido` y el auditor lo corrige con un clic |
+
+Los dos caminos imponen requisitos distintos al modelo, y el contexto solo usa
+una estrategia que los cumpla según sus `capacidades`:
+
+- Estéreo: necesita **marcas de tiempo** por segmento, para intercalar los dos
+  canales en orden. Sin ellas, el diálogo quedaría con todo el agente primero
+  y todo el cliente después.
+- Mono: necesita **diarización**.
+
+Para mejorar el caso mono, OpenAI acepta muestras de voz de hablantes
+conocidos (hasta 4, de 2 a 10 segundos cada una). Como el sistema sabe qué
+persona tenía asignada la llamada, se puede guardar una muestra corta de la voz
+de cada asesor y enviarla como «agente», así el modelo marca directamente sus
+intervenciones. Queda como mejora opcional, después de ver los resultados sin
+muestra.
+
+Se guarda en la llamada qué camino se usó (`canales_audio`: `mono`,
+`estereo`, `estereo_duplicado`), para medir después la calidad de cada uno.
 
 **Estrategias iniciales.** Los nombres de modelos y los precios cambian
 seguido, así que el modelo de cada proveedor es configurable
@@ -474,9 +499,23 @@ contra la documentación vigente al implementar:
 
 | Estrategia | Opciones de modelo | A tener en cuenta |
 |---|---|---|
-| `openai` | Familia Whisper y los modelos `gpt-4o-*-transcribe` | Límite de 25 MB por archivo (el MP3 ayuda; si no, se parte); diarización solo en algunos modelos |
+| `openai` ⭐ proveedor inicial | `gpt-transcribe` (el actual), `gpt-4o-transcribe-diarize` (separa hablantes), `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | Límite de 25 MB por archivo (el MP3 ayuda; si no, se parte). **Todos menos `gpt-transcribe` están anunciados para apagarse el 2027-02-26.** Cada modelo devuelve un formato distinto (`diarized_json` con hablantes y tiempos, `verbose_json` con tiempos, `json` solo con texto), y la estrategia lo traduce a la forma común |
 | `alibaba` | Model Studio / DashScope: Paraformer, SenseVoice, Qwen-ASR | La transcripción de archivos grabados de Paraformer es asíncrona y pide una URL pública del audio; hay que elegir la región internacional |
 | `falsa` | — | Devuelve un texto fijo; para pruebas y desarrollo sin costo |
+
+**Modelo de OpenAI.** La elección depende de lo que resulte ser el audio:
+
+- Si las grabaciones son **estéreo**, alcanza con un modelo que dé marcas de
+  tiempo, sin diarización.
+- Si son **mono**, hace falta diarización. Hoy la ofrece
+  `gpt-4o-transcribe-diarize`, que se apaga el 2027-02-26; antes de esa fecha
+  hay que confirmar si `gpt-transcribe` (o su reemplazo) separa hablantes.
+
+Qué formatos y marcas de tiempo devuelve `gpt-transcribe` no está documentado
+en lo revisado (los tipos del SDK oficial de OpenAI 3.41.0; la documentación
+web no se pudo consultar desde el entorno de desarrollo). Se confirma con la
+prueba de la sección 9 antes de fijar el modelo. Como el modelo es
+configurable, cambiarlo no exige tocar código.
 
 Después se pueden sumar Deepgram, AssemblyAI, Google o un Whisper propio
 (`faster-whisper`), cada uno como una estrategia más.
@@ -531,6 +570,8 @@ solo sumarían quién las hizo.
 | `TRANSCRIPCION_RESPALDO` | Estrategias a probar si falla la principal, separadas por coma |
 | `TRANSCRIPCION_IDIOMA` | `es` |
 | `OPENAI_API_KEY`, `OPENAI_MODELO_TRANSCRIPCION` | Credencial y modelo de OpenAI |
+| `OPENAI_PRECIO_MINUTO` | Precio por minuto para el costo estimado. Sin valor, el panel no muestra costo en vez de inventarlo |
+| `CLOUDTALK_CANAL_AGENTE` | `izquierdo` o `derecho`, para grabaciones estéreo; se fija tras escuchar una grabación |
 | `ALIBABA_API_KEY`, `ALIBABA_REGION`, `ALIBABA_MODELO_TRANSCRIPCION` | Credencial, región y modelo de Alibaba Model Studio |
 
 Las variables actuales se mantienen.
@@ -610,16 +651,15 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
 ## 9. Pendientes
 
 1. La ficha de calidad: ¿ya existe con sus criterios y pesos, o se arma?
-2. ¿Con qué proveedor arrancamos por defecto? Propuesta: transcribir una
-   muestra de 20 llamadas reales con OpenAI y con Alibaba y decidir por
-   calidad y precio.
+2. **Prueba con grabaciones reales antes de fijar el modelo de OpenAI.**
+   Descargar unas 20 grabaciones de CloudTalk y ver: si son mono o estéreo (y,
+   si son estéreo, qué canal es el agente), qué devuelve `gpt-transcribe` en
+   formatos y marcas de tiempo, cómo separa hablantes
+   `gpt-4o-transcribe-diarize`, y el costo real por minuto.
 3. ¿Cuánto espacio en disco tiene el plan del hosting? ¿El puerto 8023 de
    SFTP está abierto en el firewall del hosting?
 4. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
-5. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
-   canales separados)? Se confirma con una grabación real; define si la
-   atribución de hablantes es exacta o depende del proveedor.
-6. Protección de datos: los clientes están en España (RGPD). Enviar audio a
+5. Protección de datos: los clientes están en España (RGPD). Enviar audio a
    un proveedor externo necesita su acuerdo de tratamiento de datos y elegir
    una región adecuada (en Alibaba, la internacional o la europea si existe
    para el modelo elegido). Hay que confirmarlo antes de usar audio real.
