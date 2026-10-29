@@ -28,12 +28,13 @@ no permite:
 - Traza por número de teléfono del cliente.
 - Escucha de grabaciones bajo demanda, con guardado en MP3 en el FTP de las
   llamadas escuchadas.
+- Transcripción propia de las llamadas (hoy ninguna trae transcripción), con
+  proveedores intercambiables: OpenAI, Alibaba y otros.
 - Fichas de auditoría configurables, pantalla de auditoría y reporte
   descargable.
 - Varios usuarios con rol.
 
-**No incluye (por ahora):** transcribir llamadas con un motor propio, puntuar
-de forma automática con IA, enviar reportes por correo, ni que los asesores
+**No incluye (por ahora):** puntuar de forma automática con IA, enviar reportes por correo, ni que los asesores
 entren a ver su propia nota. La arquitectura no impide agregarlos después.
 
 ## 3. Decisiones tomadas
@@ -53,6 +54,8 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 | Audio | Mixto: bajo demanda; se guarda en MP3 lo que se escucha | Poco espacio y la evidencia de cada auditoría queda guardada |
 | Almacén de audio | FTP del hosting contratado, con FTPS si está disponible | Ya está pago por un año |
 | Rutas de audio | Relativas al directorio del FTP | Permite cambiar de servidor sin tocar la base |
+| Transcripción | Propia, con el patrón **Strategy**: una estrategia por proveedor | Ninguna llamada trae transcripción; se puede cambiar o comparar proveedores sin tocar el resto del código |
+| Cuándo transcribir | Bajo demanda al abrir una llamada, y en lote por filtros con costo estimado previo | Coherente con la estrategia mixta de audio; no se paga por llamadas que nadie audita |
 
 ## 4. Arquitectura
 
@@ -67,10 +70,11 @@ entren a ver su propia nota. La arquitectura no impide agregarlos después.
 │ db/          modelos SQLAlchemy, sesión, Alembic           │
 │ clientes/    chatwoot.py, ringover.py, cloudtalk.py        │
 │ audio/       conversión a MP3 y almacén FTP                │
-│ sync/        proceso aparte que llena la base              │
-└───────────────┬───────────────────────────┬────────────────┘
-                │                           │
-         PostgreSQL                    Servidor FTP
+│ transcripcion/ estrategias por proveedor (OpenAI, Alibaba…)│
+│ sync/        proceso aparte que llena la base y transcribe │
+└───────┬───────────────────┬───────────────────┬────────────┘
+        │                   │                   │
+   PostgreSQL          Servidor FTP     APIs de transcripción
 ```
 
 Se despliegan **tres servicios en EasyPanel** con la misma imagen Docker:
@@ -108,6 +112,14 @@ app/
   audio/
     conversion.py      # WAV → MP3 con ffmpeg
     almacen_ftp.py     # subir, bajar, existe
+  transcripcion/
+    base.py            # interfaz EstrategiaTranscripcion y esquemas
+    registro.py        # nombre → estrategia; elige según configuración
+    servicio.py        # contexto: prepara audio, llama, normaliza, guarda
+    estrategias/
+      openai.py
+      alibaba.py
+      falsa.py         # para pruebas y desarrollo, sin costo
   sync/
     __main__.py        # bucle del proceso de sincronización
     cloudtalk.py
@@ -141,12 +153,14 @@ clientes ── llamadas / conversaciones (por teléfono)
 
 | Tabla | Campos principales | Notas |
 |---|---|---|
-| `usuarios` | id, usuario, nombre, hash_contraseña, rol, activo | Roles: `admin`, `auditor`, `supervisor` (sección 5.8) |
+| `usuarios` | id, usuario, nombre, hash_contraseña, rol, activo | Roles: `admin`, `auditor`, `supervisor` (sección 5.9) |
 | `personas` | id, nombre, correo, área (`Comercial`/`RDC`), activa | El asesor real; reemplaza a `asesores.csv` |
 | `cuentas` | id, plataforma (`cloudtalk`/`ringover`/`chatwoot`), id_externo, nombre, correo, compartida, persona_id | Si no es compartida, `persona_id` es su único dueño |
 | `franjas` | id, cuenta_id, persona_id, día_semana (0–6), hora_inicio, hora_fin, vigente_desde, vigente_hasta | Horas en `Europe/Madrid`. Sin superposición por cuenta (restricción `EXCLUDE` de Postgres) |
 | `clientes` | id, teléfono_e164, teléfono_original, nombre, revisar | `revisar` marca números que no se pudieron normalizar |
-| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`franja`/`dueño`/`manual`/`sin_asignar`), inicio, duración, dirección, estado, transcripción (JSONB), enlace_plataforma, audio_estado, audio_ruta | Único por (plataforma, id_externo) |
+| `llamadas` | id, plataforma, id_externo, cuenta_id, cliente_id, persona_id, asignación (`franja`/`dueño`/`manual`/`sin_asignar`), inicio, duración, dirección, estado, enlace_plataforma, audio_estado, audio_ruta, transcripción_principal_id | Único por (plataforma, id_externo) |
+| `transcripciones` | id, llamada_id, proveedor, modelo, idioma, segmentos (JSONB), texto, duración_audio, costo_estimado, creado_en | Una llamada puede tener varias (por ejemplo, para comparar proveedores); una es la principal |
+| `trabajos_transcripcion` | id, llamada_id, proveedor, estado (`pendiente`/`en_proceso`/`hecho`/`error`), intentos, error, pedido_por | Cola que procesa `sync` (sección 5.7) |
 | `conversaciones` | id, id_externo, inbox, cuenta_id, cliente_id, persona_id, asignación, inicio, cierre, estado, etiquetas, dirección, área | Los mensajes se guardan aparte o en JSONB |
 | `fichas` | id, nombre, versión, activa | Las fichas se versionan: una auditoría vieja conserva su ficha |
 | `criterios` | id, ficha_id, nombre, descripción, peso, puntaje_máx, crítico | Un criterio crítico en cero anula la nota |
@@ -190,9 +204,10 @@ Proceso aparte que corre cada N minutos (`SYNC_INTERVALO_MINUTOS`):
   lo nuevo, con un margen de solapamiento para no perder registros tardíos.
 - Escribe con *upsert* por (plataforma, id_externo): repetir un ciclo no
   duplica nada.
-- CloudTalk: historial de llamadas → transcripción de las grabadas. Respeta el
-  límite de 60 peticiones por minuto, como hoy.
-- Ringover: transcripciones y `GET /calls` (para dirección y número).
+- CloudTalk: historial de llamadas (con `recording_link` para saber cuáles
+  tienen grabación). Respeta el límite de 60 peticiones por minuto, como hoy.
+- Ringover: `GET /calls` (dirección, número y grabación).
+- Procesa la cola de transcripciones (sección 5.7).
 - Chatwoot: conversaciones con su asesor, inbox, etiquetas y teléfono.
 - Después de guardar, aplica la asignación (5.3) y la traza por teléfono (5.4).
 - Un bloqueo en Postgres (`pg_advisory_lock`) impide que corran dos ciclos a
@@ -223,7 +238,111 @@ existe, para no gastar peticiones en llamadas sin grabación.
 
 El endpoint de grabaciones de Ringover está pendiente de confirmar.
 
-### 5.7 Auditorías y reportes
+### 5.7 Transcripción (patrón Strategy)
+
+Ninguna llamada trae transcripción de la plataforma, así que se transcribe con
+un proveedor externo. Cada proveedor es una **estrategia** con la misma
+interfaz; el resto del sistema solo conoce esa interfaz.
+
+```
+                 ServicioTranscripcion (contexto)
+                 prepara audio · elige estrategia · guarda
+                              │ usa
+                 «interfaz» EstrategiaTranscripcion
+                 transcribir(audio, opciones) -> Transcripcion
+           ┌──────────────┬──────────────┬──────────────┐
+     EstrategiaOpenAI  EstrategiaAlibaba  EstrategiaX   EstrategiaFalsa
+```
+
+**Interfaz** (`transcripcion/base.py`):
+
+```python
+class OpcionesTranscripcion(BaseModel):
+    idioma: str = "es"
+    hablantes: int = 2
+    vocabulario: list[str] = []      # nombres de productos, marcas
+
+class Segmento(BaseModel):
+    hablante: Literal["agente", "cliente", "desconocido"]
+    inicio: float                    # segundos
+    fin: float
+    texto: str
+
+class Transcripcion(BaseModel):
+    proveedor: str
+    modelo: str
+    idioma: str
+    segmentos: list[Segmento]
+    duracion_audio: float
+    costo_estimado: Decimal | None
+
+class Capacidades(BaseModel):
+    diarizacion: bool                # separa hablantes por sí mismo
+    tamano_max_mb: float | None      # límite por archivo
+    duracion_max_s: float | None
+    requiere_url: bool               # pide una URL en vez del archivo
+
+class EstrategiaTranscripcion(Protocol):
+    nombre: str
+    capacidades: Capacidades
+    def transcribir(self, audio: AudioPreparado,
+                    opciones: OpcionesTranscripcion) -> Transcripcion: ...
+    def costo_estimado(self, duracion_s: float) -> Decimal | None: ...
+```
+
+Cada estrategia traduce la respuesta propia del proveedor a esta forma común.
+Las pantallas, la base y los reportes nunca ven el formato de un proveedor.
+
+**Registro** (`transcripcion/registro.py`): un diccionario nombre → clase.
+Agregar un proveedor es escribir una clase nueva y registrarla; nada más
+cambia. El proveedor por defecto sale de `TRANSCRIPCION_PROVEEDOR`, y en cada
+pedido se puede elegir otro. Se puede definir una cadena de respaldo
+(`TRANSCRIPCION_RESPALDO`): si el principal falla, se prueba con el siguiente.
+
+**Contexto** (`transcripcion/servicio.py`) hace lo que es común a todos:
+
+1. Obtiene el audio con el flujo de la sección 5.6, así que transcribir una
+   llamada también la deja guardada en el FTP.
+2. **Separa los hablantes por canal si la grabación es estéreo.** Si la
+   plataforma graba agente y cliente en canales distintos, se transcribe cada
+   canal por separado y la atribución es exacta con cualquier proveedor. Si es
+   mono, se usa la diarización del proveedor y se deduce quién es el agente
+   (por ejemplo, quien saluda con el nombre de la empresa); si no se puede,
+   queda `desconocido` y el auditor lo corrige.
+3. Ajusta el audio a las `capacidades` de la estrategia: lo parte en trozos si
+   supera el tamaño o la duración máximos y une los segmentos al final; si la
+   estrategia `requiere_url`, publica el archivo en una URL temporal.
+4. Llama a la estrategia, guarda el resultado en `transcripciones` y la marca
+   como principal si la llamada no tenía otra.
+
+**Estrategias iniciales.** Los nombres de modelos y los precios cambian
+seguido, así que el modelo de cada proveedor es configurable
+(`OPENAI_MODELO_TRANSCRIPCION`, `ALIBABA_MODELO_TRANSCRIPCION`) y se confirma
+contra la documentación vigente al implementar:
+
+| Estrategia | Opciones de modelo | A tener en cuenta |
+|---|---|---|
+| `openai` | Familia Whisper y los modelos `gpt-4o-*-transcribe` | Límite de 25 MB por archivo (el MP3 ayuda; si no, se parte); diarización solo en algunos modelos |
+| `alibaba` | Model Studio / DashScope: Paraformer, SenseVoice, Qwen-ASR | La transcripción de archivos grabados de Paraformer es asíncrona y pide una URL pública del audio; hay que elegir la región internacional |
+| `falsa` | — | Devuelve un texto fijo; para pruebas y desarrollo sin costo |
+
+Después se pueden sumar Deepgram, AssemblyAI, Google o un Whisper propio
+(`faster-whisper`), cada uno como una estrategia más.
+
+**Cola.** Los pedidos se guardan en `trabajos_transcripcion` y los procesa
+`sync` (`SELECT … FOR UPDATE SKIP LOCKED`, varios a la vez sin pisarse).
+Así un lote grande no bloquea el panel. Un error se reintenta hasta tres veces
+con espera creciente; después queda en `error` con el motivo visible.
+
+**Costo.** Antes de lanzar un lote, el panel suma la duración de las llamadas
+elegidas y muestra el costo estimado de la estrategia. Cada transcripción
+guarda su costo, y la página de configuración muestra el gasto del mes.
+
+**Comparar proveedores.** Como una llamada puede tener varias
+transcripciones, se puede transcribir una muestra con dos estrategias, ver
+los textos lado a lado y elegir el proveedor por calidad y precio.
+
+### 5.8 Auditorías y reportes
 
 - Nota final = suma de (puntaje / máximo × peso) / suma de pesos × 100, salvo
   que un criterio crítico esté en cero, en cuyo caso la nota es 0.
@@ -235,7 +354,7 @@ El endpoint de grabaciones de Ringover está pendiente de confirmar.
   - Exportación en Excel (`openpyxl`, una hoja por reporte) y CSV. El PDF
     queda como opcional.
 
-### 5.8 Usuarios y roles
+### 5.9 Usuarios y roles
 
 | Rol | Puede |
 |---|---|
@@ -247,7 +366,7 @@ El login sigue con `streamlit-authenticator`, pero los usuarios salen de la
 tabla `usuarios`. El usuario actual de las variables de entorno se crea como
 `admin` en el primer arranque.
 
-### 5.9 Configuración nueva
+### 5.10 Configuración nueva
 
 | Variable | Descripción |
 |---|---|
@@ -257,13 +376,19 @@ tabla `usuarios`. El usuario actual de las variables de entorno se crea como
 | `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al FTP |
 | `FTP_TLS` | `true` para FTPS |
 | `SYNC_INTERVALO_MINUTOS` | Frecuencia de la sincronización |
+| `TRANSCRIPCION_PROVEEDOR` | Estrategia por defecto: `openai`, `alibaba`, `falsa`… |
+| `TRANSCRIPCION_RESPALDO` | Estrategias a probar si falla la principal, separadas por coma |
+| `TRANSCRIPCION_IDIOMA` | `es` |
+| `OPENAI_API_KEY`, `OPENAI_MODELO_TRANSCRIPCION` | Credencial y modelo de OpenAI |
+| `ALIBABA_API_KEY`, `ALIBABA_REGION`, `ALIBABA_MODELO_TRANSCRIPCION` | Credencial, región y modelo de Alibaba Model Studio |
 
 Las variables actuales se mantienen.
 
-### 5.10 Dependencias nuevas
+### 5.11 Dependencias nuevas
 
 `sqlalchemy`, `alembic`, `psycopg[binary]`, `pydantic`, `pydantic-settings`,
-`phonenumbers`, `openpyxl`. En el `Dockerfile`: el paquete del sistema
+`phonenumbers`, `openpyxl`, `openai` y el SDK de Alibaba (`dashscope`) o
+llamadas HTTP directas con `requests`. En el `Dockerfile`: el paquete del sistema
 `ffmpeg`. Para las pruebas de base de datos: `testcontainers[postgres]` o un
 Postgres de servicio en CI.
 
@@ -279,13 +404,14 @@ rol del usuario.
 | **Cuentas** | admin | Cuentas de cada plataforma (se cargan solas desde `sync`); marcar compartida o elegir dueño |
 | **Franjas** | admin | Por cuenta compartida: tabla editable de persona, día, inicio, fin y vigencia. Vista semanal del horario. Avisa superposiciones y muestra cuántas llamadas se reasignarían antes de guardar |
 | **Sin asignar** | auditor | Bandeja de llamadas y chats sin persona, con asignación individual o en lote |
-| **Llamadas** | auditor, supervisor | Lista filtrable (fecha, persona, cuenta, dirección, duración, con transcripción, auditada o no). Al abrir una llamada: reproductor, transcripción, persona asignada (editable) y botón «Auditar» |
+| **Llamadas** | auditor, supervisor | Lista filtrable (fecha, persona, cuenta, dirección, duración, con transcripción, auditada o no). Al abrir una llamada: reproductor, transcripción, persona asignada (editable), botón «Transcribir» (con el proveedor por defecto o uno elegido) y botón «Auditar». Desde la lista se eligen varias llamadas y se transcriben en lote, viendo antes el costo estimado |
 | **Historial del cliente** | auditor, supervisor | Buscar por número. Línea de tiempo con chats y llamadas por fecha, con quién atendió cada uno. Se abre cada elemento y se audita desde ahí |
 | **Auditar** | auditor | Audio y transcripción (o mensajes del chat) a la izquierda; ficha con los criterios, puntajes y comentarios a la derecha. Guardar borrador o cerrar. Muestra la nota en vivo |
 | **Auditorías** | auditor, supervisor | Lista de auditorías con filtros; abrir una muestra el detalle y el audio guardado |
 | **Reportes** | auditor, supervisor | Elegir período, área y persona; ver la tabla y un gráfico de evolución; descargar Excel o CSV |
 | **Fichas** | admin | Crear y editar fichas y criterios (nombre, peso, puntaje máximo, crítico). Editar una ficha en uso crea una versión nueva |
 | **Usuarios** | admin | Alta de usuarios del panel, rol y contraseña |
+| **Transcripción** | admin | Proveedor por defecto y de respaldo, estado de la cola (pendientes, errores con reintento), gasto del mes por proveedor y comparación lado a lado de dos transcripciones de la misma llamada |
 | **Exportar datos** | auditor, supervisor | Los tres CSV de hoy (Chatwoot, Ringover y CloudTalk), ahora leídos de la base |
 
 Criterios comunes a todas las páginas:
@@ -295,6 +421,11 @@ Criterios comunes a todas las páginas:
   única excepción es la primera escucha de una grabación.
 - El audio se cachea por sesión (`st.cache_data`) para adelantar y retroceder
   sin volver a pedirlo.
+- La transcripción se muestra como diálogo (Agente / Cliente) con la hora de
+  cada intervención; al hacer clic en una línea, el audio salta a ese momento
+  si el reproductor lo permite (si no, se muestra el minuto para buscarlo).
+- Mientras una transcripción está en la cola, la página muestra su estado y
+  se actualiza sola (`st.fragment` con intervalo).
 
 ## 7. Etapas
 
@@ -305,8 +436,9 @@ Criterios comunes a todas las páginas:
 | 3 | Sincronización | Proceso `sync` para las tres plataformas, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
 | 5 | Audio | Grabación de CloudTalk (y de Ringover), MP3, FTP, reintentos | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
-| 6 | Auditorías | Fichas, auditorías y cálculo de nota | Fichas, Auditar y Auditorías | Se audita |
-| 7 | Reportes y usuarios | Reportes, Excel, usuarios y roles | Reportes y Usuarios | Se descarga el reporte; cada auditor tiene su usuario |
+| 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync` | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
+| 7 | Auditorías | Fichas, auditorías y cálculo de nota | Fichas, Auditar y Auditorías | Se audita |
+| 8 | Reportes y usuarios | Reportes, Excel, usuarios y roles | Reportes y Usuarios | Se descarga el reporte; cada auditor tiene su usuario |
 
 Cada etapa se entrega con pruebas y se puede desplegar por separado.
 
@@ -317,15 +449,29 @@ Cada etapa se entrega con pruebas y se puede desplegar por separado.
 - Servicios con base de datos: contra un Postgres real de prueba, no SQLite,
   porque se usan `EXCLUDE`, `JSONB` y `timestamptz`.
 - Clientes de API y FTP: simulados (`responses` y un FTP falso).
+- Transcripción: un mismo juego de pruebas de contrato que corre contra cada
+  estrategia con respuestas grabadas del proveedor (formato común, hablantes,
+  errores y límites). El contexto se prueba con la estrategia `falsa`: partir
+  audios largos, separar canales, respaldo cuando falla la principal y
+  reintentos de la cola.
 - Migraciones: una prueba que aplica todas desde cero.
 
 ## 9. Pendientes
 
 1. La ficha de calidad: ¿ya existe con sus criterios y pesos, o se arma?
-2. ¿Hay llamadas sin transcripción que tengamos que transcribir nosotros?
+2. ¿Con qué proveedor arrancamos por defecto? Propuesta: transcribir una
+   muestra de 20 llamadas reales con OpenAI y con Alibaba y decidir por
+   calidad y precio.
 3. ¿Cuánto tiempo hay que conservar los audios en el FTP?
 4. ¿El FTP del hosting acepta FTPS? ¿Cuánto espacio tiene el plan?
 5. ¿Cuál es el endpoint de grabaciones de Ringover?
 6. ¿Alguna bandeja de Chatwoot también es compartida, y necesita franjas?
 7. ¿Los roles propuestos (admin, auditor, supervisor) se ajustan al equipo?
 8. ¿Cuánto tiempo guarda CloudTalk las grabaciones en el plan contratado?
+9. ¿Las grabaciones de CloudTalk vienen en estéreo (agente y cliente en
+   canales separados)? Se confirma con una grabación real; define si la
+   atribución de hablantes es exacta o depende del proveedor.
+10. Protección de datos: los clientes están en España (RGPD). Enviar audio a
+    un proveedor externo necesita su acuerdo de tratamiento de datos y elegir
+    una región adecuada (en Alibaba, la internacional o la europea si existe
+    para el modelo elegido). Hay que confirmarlo antes de usar audio real.
