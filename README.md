@@ -16,7 +16,7 @@ distingan entre sí varias bandejas del mismo tipo.
 
 ## Uso
 
-Se entra con usuario y contraseña. Hay cuatro pestañas:
+Se entra con usuario y contraseña. Hay cinco pestañas:
 
 - **Reporte**: elegir *Desde* y *Hasta*, presionar *Generar reporte* y descargar
   el CSV.
@@ -27,7 +27,11 @@ Se entra con usuario y contraseña. Hay cuatro pestañas:
 - **Asesores**: mantener la lista de correo → área, guardada en PostgreSQL. Un
   asesor que no esté en la lista aparece como `SIN_MAPEAR` en el reporte.
   Quitar un asesor de la lista no lo borra de la base: lo desactiva, y si se
-  vuelve a agregar se reactiva.
+  vuelve a agregar se reactiva. El nombre es el que aparece en las reglas de
+  las cuentas.
+- **Cuentas**: las cuentas de CloudTalk (agentes) y de Chatwoot (usuarios), con
+  la regla que dice qué asesor atendió cada llamada o conversación. Ver
+  *Cuentas y reglas de asignación* más abajo.
 
 ## Variables de entorno
 
@@ -111,6 +115,41 @@ alembic revision --autogenerate -m "descripcion del cambio"
 
 La prueba `test_los_modelos_coinciden_con_las_migraciones` falla si un modelo
 cambió sin su migración.
+
+## Cuentas y reglas de asignación
+
+*Actualizar cuentas desde las plataformas* trae los agentes de CloudTalk
+(`GET /agents/index.json`, si CloudTalk está configurado) y los usuarios de
+Chatwoot (`GET /agents`). Una cuenta que la plataforma deja de devolver se
+desactiva, no se borra; si la respuesta llega vacía no se desactiva nada.
+
+Cada cuenta tiene una **regla de asignación**: una estrategia y sus parámetros,
+con vigencia. Las horas de las franjas son de España (`Europe/Madrid`), con su
+horario de verano; inicio incluido y fin excluido.
+
+| Estrategia | Cómo asigna |
+|---|---|
+| Una sola persona (`dueno_unico`) | Todo a un asesor |
+| Horario fijo y el resto al otro (`fijo_y_resto`) | Lo que cae dentro del horario del asesor fijo es suyo; todo lo demás, del otro. Nunca deja nada sin asignar |
+| Franjas para cada persona (`franjas_completas`) | Cada asesor tiene sus franjas; lo que no cae en ninguna queda sin asignar |
+
+- En **Chatwoot** cada usuario es una persona (las bandejas son las
+  compartidas). Al actualizar, a cada usuario sin regla cuyo correo coincide
+  con el de un asesor activo se le crea una regla *Una sola persona* desde
+  siempre. En CloudTalk no se hace, porque una cuenta compartida tiene el
+  correo de uno solo de los asesores que la usan.
+- Las reglas no se editan ni se borran. Guardar una regla nueva cierra la
+  anterior en la fecha elegida (00:00 de España); si es la misma fecha en que
+  empezó la anterior, esa queda como «corregida, nunca rigió». La base impide
+  que dos reglas de una cuenta estén vigentes a la vez.
+- Una regla no se puede guardar si nombra a un asesor inactivo. Si un asesor se
+  quita de la lista después, la tabla de cuentas avisa qué reglas lo nombran.
+
+Para agregar una estrategia nueva: una clase en
+`panel/asignacion/estrategias/` registrada con `@registrar`, su formulario en
+`ui/formularios_asignacion.py` y su ejemplo en
+`tests/test_asignacion_estrategias.py`, donde las pruebas de contrato la
+validan junto con las demás.
 
 ## Nota sobre la fecha de cierre
 

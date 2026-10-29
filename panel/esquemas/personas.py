@@ -15,6 +15,7 @@ class AsesorArea(BaseModel):
 
     correo: str
     area: Area
+    nombre: str | None = None
 
     @field_validator("correo")
     @classmethod
@@ -23,6 +24,27 @@ class AsesorArea(BaseModel):
         if not limpio:
             raise ValueError("el correo no puede estar vacío")
         return limpio
+
+    @field_validator("nombre")
+    @classmethod
+    def _normalizar_nombre(cls, valor: str | None) -> str | None:
+        return (valor or "").strip() or None
+
+
+class PersonaResumida(BaseModel):
+    """Lo que las pantallas necesitan de una persona para elegirla en una lista."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    correo: str
+    nombre: str | None
+    area: str
+    activa: bool
+
+    @property
+    def etiqueta(self) -> str:
+        return self.nombre or self.correo
 
 
 class ResumenSincronizacion(BaseModel):

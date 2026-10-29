@@ -34,6 +34,7 @@ from panel.db.base import (
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.esquemas.personas import AsesorArea
 from panel.importar_asesores import importar_asesores_csv
+from ui import cuentas as ui_cuentas
 
 DIAS_RANGO_AMPLIO = 90
 
@@ -131,7 +132,8 @@ st.title("Reportes")
     pestana_transcripciones,
     pestana_cloudtalk,
     pestana_asesores,
-) = st.tabs(["Reporte", "Transcripciones", "CloudTalk", "Asesores"])
+    pestana_cuentas,
+) = st.tabs(["Reporte", "Transcripciones", "CloudTalk", "Asesores", "Cuentas"])
 
 with pestana_reporte:
     hoy = date.today()
@@ -458,9 +460,11 @@ with pestana_asesores:
             + ", ".join(IMPORTACION.descartados)
         )
 
-    actual = leer_areas()
+    with unidad_de_trabajo(obtener_fabrica(CFG.database_url)) as sesion:
+        actual = {p.correo: p for p in RepositorioPersonas(sesion).listar()}
     tabla = pd.DataFrame(
-        sorted(actual.items()) or [], columns=["email_asesor", "area"]
+        [(p.correo, p.nombre or "", p.area) for p in sorted(actual.values(), key=lambda p: p.correo)],
+        columns=["email_asesor", "nombre", "area"],
     )
 
     editada = st.data_editor(
@@ -469,6 +473,9 @@ with pestana_asesores:
         use_container_width=True,
         column_config={
             "email_asesor": st.column_config.TextColumn("Correo del asesor", required=True),
+            "nombre": st.column_config.TextColumn(
+                "Nombre", help="Con este nombre aparece en las reglas de las cuentas."
+            ),
             "area": st.column_config.SelectboxColumn(
                 "Área", options=list(AREAS_VALIDAS), required=True
             ),
@@ -477,9 +484,13 @@ with pestana_asesores:
     )
 
     limpias = [
-        (str(fila.email_asesor).strip().lower(), str(fila.area).strip())
+        (
+            str(fila.email_asesor).strip().lower(),
+            str(fila.area).strip(),
+            "" if pd.isna(fila.nombre) else str(fila.nombre).strip(),
+        )
         for fila in editada.itertuples()
-        if str(fila.email_asesor).strip()
+        if not pd.isna(fila.email_asesor) and str(fila.email_asesor).strip()
     ]
 
     borraria_todo = bool(actual) and not limpias
@@ -503,15 +514,18 @@ with pestana_asesores:
     if st.button(
         "Guardar cambios", type="primary", disabled=borraria_todo and not confirmado
     ):
-        correos = [correo for correo, _ in limpias]
-        invalidas = [area for _, area in limpias if area not in AREAS_VALIDAS]
+        correos = [correo for correo, _, _ in limpias]
+        invalidas = [area for _, area, _ in limpias if area not in AREAS_VALIDAS]
 
         if len(correos) != len(set(correos)):
             st.error("Hay correos repetidos. Cada asesor debe aparecer una sola vez.")
         elif invalidas:
             st.error(f"El área debe ser {' o '.join(AREAS_VALIDAS)}.")
         else:
-            asesores = [AsesorArea(correo=correo, area=area) for correo, area in limpias]
+            asesores = [
+                AsesorArea(correo=correo, area=area, nombre=nombre)
+                for correo, area, nombre in limpias
+            ]
             with unidad_de_trabajo(obtener_fabrica(CFG.database_url)) as sesion:
                 resumen = RepositorioPersonas(sesion).sincronizar_areas(asesores)
             if resumen.hubo_cambios:
@@ -523,3 +537,6 @@ with pestana_asesores:
                 )
             else:
                 st.info("No había cambios que guardar.")
+
+with pestana_cuentas:
+    ui_cuentas.mostrar(obtener_fabrica(CFG.database_url), CFG)

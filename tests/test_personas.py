@@ -109,3 +109,14 @@ def test_comprobar_conexion_falla_si_la_base_no_responde():
     motor = crear_motor("postgresql+psycopg://nadie@127.0.0.1:1/panel_test?connect_timeout=2")
     with pytest.raises(OperationalError):
         comprobar_conexion(crear_fabrica_sesiones(motor))
+
+
+def test_guarda_y_cambia_el_nombre(fabrica):
+    guardar(fabrica, AsesorArea(correo="ana@e.com", area="RDC", nombre="  Ana Gil "))
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert [p.etiqueta for p in RepositorioPersonas(sesion).listar()] == ["Ana Gil"]
+
+    resumen = guardar(fabrica, AsesorArea(correo="ana@e.com", area="RDC", nombre=""))
+    assert resumen.actualizadas == 1
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert [p.etiqueta for p in RepositorioPersonas(sesion).listar()] == ["ana@e.com"]

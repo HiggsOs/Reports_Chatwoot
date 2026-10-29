@@ -299,7 +299,10 @@ guardado: «Fuera del horario fijo de Juan → Ana».
 **Reasignación.** Cuando se crea o edita una regla, se recalculan las
 interacciones de esa cuenta en su vigencia, salvo las manuales. Antes de
 guardar, el panel muestra una vista previa: «De las 340 llamadas del
-período, 210 quedan para Juan y 130 para Ana; cambian de dueño 12».
+período, 210 quedan para Juan y 130 para Ana; cambian de dueño 12». La
+reasignación y la vista previa llegan en la etapa 3, cuando existan las
+llamadas y conversaciones; la etapa 2 ya muestra el horario semanal que
+resulta de la regla.
 
 **Pruebas** (funciones puras, sin base de datos), para cada estrategia:
 dentro y fuera de cada franja, el corte entre dos franjas de la misma persona,
@@ -563,7 +566,6 @@ solo sumarían quién las hizo.
 | Variable | Descripción |
 |---|---|
 | `DATABASE_URL` | `postgresql+psycopg://usuario:clave@host:5432/base` |
-| `TZ_OPERACION` | `Europe/Madrid` |
 | `TELEFONO_REGION` | `ES` |
 | `ALMACEN_TIPO` | `sftp` (por defecto), `ftps` o `local` |
 | `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD`, `FTP_DIR` | Acceso al servidor; con SFTP, `FTP_PORT=8023` |
@@ -628,7 +630,7 @@ Criterios comunes a todas las páginas:
 | # | Etapa | Backend | Frontend | Resultado visible |
 |---|---|---|---|---|
 | 1 ✅ | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, tabla `personas`, importación de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
-| 2 | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
+| 2 ✅ | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
 | 3 | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
 | 5 | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
