@@ -1,6 +1,9 @@
-# Reportes
+# Panel de auditorías
 
-Aplicación web que genera, para el rango de fechas que se elija, tres CSV:
+Aplicación web que guarda en PostgreSQL las llamadas de CloudTalk y las
+conversaciones de Chatwoot, las asigna al asesor real (aunque la cuenta sea
+compartida) y las prepara para auditar. También genera, contra las APIs y para
+el rango de fechas que se elija, tres CSV:
 
 - **Conversaciones de Chatwoot**: asesor, fecha, canal, etiquetas, tiempo de
   resolución, si fue entrante o saliente, fecha de cierre y área (Comercial o
@@ -16,22 +19,42 @@ distingan entre sí varias bandejas del mismo tipo.
 
 ## Uso
 
-Se entra con usuario y contraseña. Hay cinco pestañas:
+Se entra con usuario y contraseña. Las páginas están en el menú lateral, en
+tres grupos.
 
-- **Reporte**: elegir *Desde* y *Hasta*, presionar *Generar reporte* y descargar
-  el CSV.
-- **Transcripciones**: mismo flujo, contra la API de Ringover. La pestaña solo
-  pide datos si está configurado `RINGOVER_API_TOKEN`.
-- **CloudTalk**: mismo flujo, contra la API de CloudTalk. Solo pide datos si
-  están configurados `CLOUDTALK_API_KEY_ID` y `CLOUDTALK_API_KEY_SECRET`.
-- **Asesores**: mantener la lista de correo → área, guardada en PostgreSQL. Un
-  asesor que no esté en la lista aparece como `SIN_MAPEAR` en el reporte.
-  Quitar un asesor de la lista no lo borra de la base: lo desactiva, y si se
-  vuelve a agregar se reactiva. El nombre es el que aparece en las reglas de
-  las cuentas.
+**Auditoría** (lee de la base, que llena la sincronización):
+
+- **Inicio**: llamadas, conversaciones y pendientes de los últimos 7 días,
+  cuentas sin regla, estado de la sincronización de cada fuente con su último
+  error, y el botón *Sincronizar ahora*.
+- **Sin asignar**: la bandeja de llamadas y conversaciones sin asesor. Se
+  eligen filas y se asignan a un asesor de una vez.
+- **Llamadas** y **Conversaciones**: listado con filtros (fechas, asesor,
+  cuenta, cliente por nombre o teléfono, solo sin asignar) y descarga en CSV.
+  Al elegir una fila se ve el detalle, el enlace a CloudTalk o a Chatwoot y se
+  puede cambiar el asesor a mano.
+
+**Configuración**:
+
+- **Asesores**: la lista de personas reales con su nombre y su área. Quitar un
+  asesor no lo borra: lo desactiva, y si se vuelve a agregar se reactiva. Un
+  asesor que no esté en la lista aparece como `SIN_MAPEAR` en el reporte de
+  Chatwoot en vivo.
 - **Cuentas**: las cuentas de CloudTalk (agentes) y de Chatwoot (usuarios), con
   la regla que dice qué asesor atendió cada llamada o conversación. Ver
   *Cuentas y reglas de asignación* más abajo.
+
+**Reportes en vivo** (consultan las APIs en el momento, como antes de la base):
+
+- **Reporte de Chatwoot**: elegir *Desde* y *Hasta*, *Generar reporte* y
+  descargar el CSV.
+- **Transcripciones de Ringover**: mismo flujo. Solo pide datos si está
+  configurado `RINGOVER_API_TOKEN`.
+- **Transcripciones de CloudTalk**: mismo flujo. Solo pide datos si están
+  configurados `CLOUDTALK_API_KEY_ID` y `CLOUDTALK_API_KEY_SECRET`.
+
+Al abrir el panel por una dirección directa (por ejemplo `/llamadas`) se entra
+a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 
 ## Variables de entorno
 
@@ -44,10 +67,13 @@ Se entra con usuario y contraseña. Hay cinco pestañas:
 | `APP_PASSWORD_HASH` | Hash bcrypt de la contraseña |
 | `APP_COOKIE_KEY` | Cadena aleatoria para firmar la cookie de sesión |
 | `DATABASE_URL` | Conexión a PostgreSQL, por ejemplo `postgres://usuario:clave@host:5432/base`. Se aceptan `postgres://`, `postgresql://` y `postgresql+psycopg://` |
-| `RINGOVER_API_TOKEN` | Token público de Ringover, con el permiso `Calls Read`. Opcional: sin él, la pestaña de transcripciones queda inactiva |
+| `RINGOVER_API_TOKEN` | Token público de Ringover, con el permiso `Calls Read`. Opcional: sin él, la página de transcripciones de Ringover queda inactiva |
 | `RINGOVER_BASE_URL` | Por defecto `https://public-api.ringover.com/v2`; usar el servidor de EE. UU. si la cuenta está allá |
 | `CLOUDTALK_API_KEY_ID` | Id de la clave de API de CloudTalk (Dashboard → Account → Settings → API Keys). Opcional |
-| `CLOUDTALK_API_KEY_SECRET` | Secreto de esa misma clave. Opcional: sin el par, la pestaña de CloudTalk queda inactiva |
+| `CLOUDTALK_API_KEY_SECRET` | Secreto de esa misma clave. Opcional: sin el par, la página de transcripciones de CloudTalk queda inactiva |
+| `SYNC_INTERVALO_MINUTOS` | Cada cuánto corre la sincronización. Por defecto `15` |
+| `SYNC_DIAS_INICIALES` | Cuántos días hacia atrás trae la primera sincronización de cada fuente. Por defecto `30` |
+| `CHATWOOT_DIAS_RELECTURA` | Cuántos días hacia atrás relee Chatwoot en cada ciclo, porque las conversaciones cambian después de creadas. Por defecto `14` |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -68,6 +94,16 @@ python generar_hash.py 'la-contraseña-elegida'
 4. Cargar las variables de entorno de la tabla anterior, con `DATABASE_URL`
    apuntando al servicio Postgres.
 5. Asignar el dominio. EasyPanel gestiona el HTTPS.
+6. Crear un segundo servicio de tipo App, **sincronización**, con el mismo
+   repositorio, las mismas variables y este comando de inicio (no necesita
+   dominio ni volumen):
+
+   ```bash
+   sh -c "alembic upgrade head && python -m panel.sync"
+   ```
+
+   Corre un ciclo cada `SYNC_INTERVALO_MINUTOS`. Si los dos servicios arrancan a
+   la vez, las migraciones esperan una a la otra.
 
 Al arrancar, el contenedor aplica las migraciones pendientes
 (`alembic upgrade head`) antes de levantar la app. Si la base no responde, el
@@ -78,7 +114,7 @@ contenedor no arranca.
 La primera vez que la app arranca con la base vacía, copia
 `DATA_DIR/asesores.csv` a la tabla `personas` y renombra el archivo a
 `asesores.csv.migrado`, que queda como respaldo y ya no se lee. Las filas con un
-área que no sea `Comercial` ni `RDC` no se importan; la pestaña **Asesores**
+área que no sea `Comercial` ni `RDC` no se importan; la página **Asesores**
 las muestra en un aviso para cargarlas a mano. Si la base ya tenía asesores, el
 archivo no se importa (la base manda), pero se renombra igual.
 
@@ -144,12 +180,54 @@ horario de verano; inicio incluido y fin excluido.
   que dos reglas de una cuenta estén vigentes a la vez.
 - Una regla no se puede guardar si nombra a un asesor inactivo. Si un asesor se
   quita de la lista después, la tabla de cuentas avisa qué reglas lo nombran.
+- *Ver vista previa* dice, sin guardar nada, cuántas interacciones del período
+  quedarían para cada asesor y cuántas cambiarían. Al guardar, se reasignan las
+  interacciones de la cuenta desde la fecha de la regla.
+- Una interacción asignada a mano (en *Sin asignar* o en el detalle de
+  *Llamadas* y *Conversaciones*) no la cambian ni la sincronización ni las
+  reglas nuevas, hasta que se vuelve a la asignación automática.
 
 Para agregar una estrategia nueva: una clase en
 `panel/asignacion/estrategias/` registrada con `@registrar`, su formulario en
 `ui/formularios_asignacion.py` y su ejemplo en
 `tests/test_asignacion_estrategias.py`, donde las pruebas de contrato la
 validan junto con las demás.
+
+## Sincronización
+
+`python -m panel.sync` guarda en la base las llamadas contestadas de CloudTalk
+(si está configurado) y las conversaciones de Chatwoot, y las asigna con la
+regla de su cuenta.
+
+- **Incremental**: cada fuente guarda hasta dónde llegó (se ve en Inicio). Las
+  llamadas se releen con dos horas de margen; las conversaciones, los últimos
+  `CHATWOOT_DIAS_RELECTURA` días, porque se resuelven o se reasignan después.
+  Una conversación que cambia más allá de ese plazo no se actualiza.
+- **Sin duplicados**: se guarda por id de la plataforma; repetir un ciclo
+  actualiza lo que ya estaba.
+- **Mensajes de Chatwoot**: se piden solo de las conversaciones nuevas o cuya
+  última actividad cambió, para calcular la dirección y el cierre.
+- **Clientes**: el teléfono se normaliza a formato internacional (`+34…` si no
+  trae código de país), así una llamada y un chat del mismo número quedan
+  ligados al mismo cliente. Los números que no se pueden interpretar se
+  guardan con sus dígitos y quedan marcados para revisar.
+- **Errores**: si una fuente falla, su error queda anotado y se ve en Inicio;
+  la otra fuente sigue. El punto no avanza, así que el próximo ciclo reintenta.
+- **Un ciclo a la vez**: el proceso y el botón *Sincronizar ahora* comparten un
+  bloqueo de Postgres; si ya hay uno en curso, el otro se salta.
+
+Comandos útiles (con las mismas variables de entorno):
+
+```bash
+python -m panel.sync --una-vez
+```
+
+```bash
+python -m panel.sync --desde 2026-01-01 --hasta 2026-06-30
+```
+
+El segundo carga el historial de ese rango, por ejemplo la primera vez, sin
+mover el punto de la sincronización normal.
 
 ## Nota sobre la fecha de cierre
 
@@ -213,7 +291,7 @@ siguiente intento sigue desde ahí.
 
 ### Filtros
 
-La pestaña tiene un panel **Filtros** que se aplica antes de descargar las
+La página *Transcripciones de CloudTalk* tiene un panel **Filtros** que se aplica antes de descargar las
 transcripciones, así que además de acotar el CSV acorta la espera:
 
 - **Agentes**, **Grupos** y **Números de la empresa**: listas que se llenan con
@@ -226,7 +304,7 @@ transcripciones, así que además de acotar el CSV acorta la espera:
 - **Solo llamadas con transcripción**: no consulta las llamadas sin grabación y
   quita del CSV las que no tienen texto.
 
-Si los catálogos no se pueden cargar, la pestaña lo avisa y el reporte sigue
+Si los catálogos no se pueden cargar, la página lo avisa y el reporte sigue
 funcionando sin esas tres listas.
 
 La columna `estado` dice qué pasó con cada llamada:

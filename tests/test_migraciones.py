@@ -7,7 +7,15 @@ from panel.db import modelos  # noqa: F401
 from panel.db.base import Base
 from tests.conftest import configuracion_alembic
 
-TABLAS = ("personas", "cuentas", "reglas_asignacion")
+TABLAS = (
+    "personas",
+    "cuentas",
+    "reglas_asignacion",
+    "clientes",
+    "llamadas",
+    "conversaciones",
+    "puntos_sincronizacion",
+)
 
 
 def test_los_modelos_coinciden_con_las_migraciones(motor):

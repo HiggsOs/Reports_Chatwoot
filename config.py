@@ -15,6 +15,10 @@ CLOUDTALK_AI_BASE_URL_POR_DEFECTO = "https://api.cloudtalk.io/v1"
 DRIVER_POSTGRES = "postgresql+psycopg"
 _ESQUEMAS_POSTGRES = ("postgres", "postgresql")
 
+SYNC_INTERVALO_MINUTOS_POR_DEFECTO = 15
+SYNC_DIAS_INICIALES_POR_DEFECTO = 30
+CHATWOOT_DIAS_RELECTURA_POR_DEFECTO = 14
+
 _REQUERIDAS = (
     "CHATWOOT_BASE_URL",
     "CHATWOOT_ACCOUNT_ID",
@@ -50,6 +54,13 @@ class Config(BaseModel):
     cloudtalk_key_secret: str = ""
     cloudtalk_base_url: str = CLOUDTALK_BASE_URL_POR_DEFECTO
     cloudtalk_ai_base_url: str = CLOUDTALK_AI_BASE_URL_POR_DEFECTO
+    # Sincronización (proceso `python -m panel.sync`).
+    sync_intervalo_minutos: int = SYNC_INTERVALO_MINUTOS_POR_DEFECTO
+    # Hasta dónde mira hacia atrás la primera sincronización de cada fuente.
+    sync_dias_iniciales: int = SYNC_DIAS_INICIALES_POR_DEFECTO
+    # Las conversaciones cambian después de creadas (se resuelven, se
+    # reasignan), así que cada ciclo relee las de estos últimos días.
+    chatwoot_dias_relectura: int = CHATWOOT_DIAS_RELECTURA_POR_DEFECTO
 
     @property
     def cloudtalk_configurado(self) -> bool:
@@ -71,6 +82,19 @@ def normalizar_url_bd(bruta: str) -> str:
     raise ConfigError(
         f"DATABASE_URL debe apuntar a PostgreSQL, se recibió el esquema {esquema!r}."
     )
+
+
+def _entero_positivo(entorno: Mapping[str, str], nombre: str, defecto: int) -> int:
+    bruto = (entorno.get(nombre) or "").strip()
+    if not bruto:
+        return defecto
+    try:
+        valor = int(bruto)
+    except ValueError:
+        valor = 0
+    if valor < 1:
+        raise ConfigError(f"{nombre} debe ser un número entero mayor que cero, se recibió: {bruto!r}")
+    return valor
 
 
 def cargar_config(entorno: Mapping[str, str]) -> Config:
@@ -113,6 +137,15 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
         cloudtalk_ai_base_url=(
             entorno.get("CLOUDTALK_AI_BASE_URL") or CLOUDTALK_AI_BASE_URL_POR_DEFECTO
         ).strip().rstrip("/"),
+        sync_intervalo_minutos=_entero_positivo(
+            entorno, "SYNC_INTERVALO_MINUTOS", SYNC_INTERVALO_MINUTOS_POR_DEFECTO
+        ),
+        sync_dias_iniciales=_entero_positivo(
+            entorno, "SYNC_DIAS_INICIALES", SYNC_DIAS_INICIALES_POR_DEFECTO
+        ),
+        chatwoot_dias_relectura=_entero_positivo(
+            entorno, "CHATWOOT_DIAS_RELECTURA", CHATWOOT_DIAS_RELECTURA_POR_DEFECTO
+        ),
     )
 
 

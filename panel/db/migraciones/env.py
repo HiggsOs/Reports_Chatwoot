@@ -7,7 +7,7 @@ hacen) y, si no, de la variable DATABASE_URL.
 import os
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from config import ConfigError, normalizar_url_bd
 from panel.db import modelos  # noqa: F401  (registra las tablas en el metadata)
@@ -15,6 +15,11 @@ from panel.db.base import Base
 
 configuracion = context.config
 target_metadata = Base.metadata
+
+# La app y el proceso de sincronización aplican las migraciones al arrancar. Si
+# arrancan a la vez, este bloqueo hace que el segundo espere al primero en vez
+# de intentar crear las mismas tablas.
+CLAVE_BLOQUEO_MIGRACIONES = 7_420_001
 
 
 def _url() -> str:
@@ -51,6 +56,10 @@ def _migrar(conexion) -> None:
         connection=conexion, target_metadata=target_metadata, compare_type=True
     )
     with context.begin_transaction():
+        conexion.execute(
+            text("SELECT pg_advisory_xact_lock(:clave)"),
+            {"clave": CLAVE_BLOQUEO_MIGRACIONES},
+        )
         context.run_migrations()
 
 

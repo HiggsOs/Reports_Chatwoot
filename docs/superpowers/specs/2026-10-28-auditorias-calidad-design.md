@@ -300,9 +300,8 @@ guardado: «Fuera del horario fijo de Juan → Ana».
 interacciones de esa cuenta en su vigencia, salvo las manuales. Antes de
 guardar, el panel muestra una vista previa: «De las 340 llamadas del
 período, 210 quedan para Juan y 130 para Ana; cambian de dueño 12». La
-reasignación y la vista previa llegan en la etapa 3, cuando existan las
-llamadas y conversaciones; la etapa 2 ya muestra el horario semanal que
-resulta de la regla.
+reasignación y la vista previa llegaron en la etapa 3, con las llamadas y
+conversaciones.
 
 **Pruebas** (funciones puras, sin base de datos), para cada estrategia:
 dentro y fuera de cada franja, el corte entre dos franjas de la misma persona,
@@ -631,7 +630,7 @@ Criterios comunes a todas las páginas:
 |---|---|---|---|---|
 | 1 ✅ | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, tabla `personas`, importación de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
 | 2 ✅ | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
-| 3 | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
+| 3 ✅ | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
 | 5 | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
 | 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync`, retención de 3 años | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
@@ -641,6 +640,23 @@ Criterios comunes a todas las páginas:
 Cada etapa se entrega con pruebas y se puede desplegar por separado.
 
 Cada etapa crea solo las tablas que usa, con su propia migración de Alembic.
+La etapa 3 creó `clientes`, `llamadas`, `conversaciones` y
+`puntos_sincronizacion`; las columnas de audio y transcripción de `llamadas`
+llegan con las etapas 5 y 6.
+
+Decisiones de la etapa 3:
+
+- La app pasó a varias páginas (`st.navigation`) en tres grupos: Auditoría,
+  Configuración y Reportes en vivo.
+- Los CSV que leen de la base se descargan desde Llamadas y Conversaciones. Los
+  tres reportes contra las APIs siguen como «Reportes en vivo», sin cambios,
+  porque el de CloudTalk incluye la transcripción de Conversation
+  Intelligence, que no se guarda en la base.
+- Las conversaciones se releen los últimos `CHATWOOT_DIAS_RELECTURA` días en
+  cada ciclo: el filtro de Chatwoot que usa el cliente actual es por fecha de
+  creación, y una conversación cambia después de creada.
+- Cada llamada y conversación guarda lo que devolvió la API (`datos_origen`),
+  para no tener que volver a pedirlo si después hace falta otro campo.
 La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
 etapa.
 

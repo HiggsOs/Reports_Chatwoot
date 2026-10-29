@@ -31,6 +31,14 @@ DESDE_SIEMPRE = datetime(2000, 1, 1, tzinfo=timezone.utc)
 SIN_REGLA = "La cuenta no tiene regla de asignación"
 
 
+class AsignacionResuelta(BaseModel):
+    """El resultado de la estrategia, más la regla que lo produjo."""
+
+    persona_id: int | None
+    motivo: str
+    regla_id: int | None
+
+
 class ReglaInvalida(ValueError):
     """La regla no se puede guardar. `errores` trae los motivos, legibles."""
 
@@ -55,17 +63,43 @@ class ServicioAsignacion:
         self._cuentas = RepositorioCuentas(sesion)
         self._reglas = RepositorioReglas(sesion)
         self._personas = RepositorioPersonas(sesion)
+        # Reglas por cuenta ya leídas, con sus parámetros validados: una
+        # sincronización asigna miles de interacciones de pocas cuentas.
+        self._cache: dict[int, list[tuple[ReglaAsignacion, EstrategiaAsignacion, BaseModel]]] = {}
 
     def asignar(self, cuenta_id: int, inicio: datetime) -> ResultadoAsignacion:
         """Qué persona atendió una interacción que empezó en `inicio`."""
+        resuelta = self.resolver(cuenta_id, inicio)
+        return ResultadoAsignacion(persona_id=resuelta.persona_id, motivo=resuelta.motivo)
+
+    def resolver(self, cuenta_id: int, inicio: datetime) -> AsignacionResuelta:
         if inicio.tzinfo is None:
             raise ValueError("La hora de inicio debe traer zona horaria.")
-        regla = self._reglas.vigente(cuenta_id, inicio)
-        if regla is None:
-            return ResultadoAsignacion(persona_id=None, motivo=SIN_REGLA)
-        estrategia = registro.obtener(regla.estrategia)
-        parametros = estrategia.Parametros.model_validate(regla.parametros)
-        return estrategia.asignar(inicio.astimezone(self._zona), parametros)
+        for regla, estrategia, parametros in self._reglas_de(cuenta_id):
+            if regla.vigente_desde <= inicio and (
+                regla.vigente_hasta is None or inicio < regla.vigente_hasta
+            ):
+                resultado = estrategia.asignar(inicio.astimezone(self._zona), parametros)
+                return AsignacionResuelta(
+                    persona_id=resultado.persona_id, motivo=resultado.motivo, regla_id=regla.id
+                )
+        return AsignacionResuelta(persona_id=None, motivo=SIN_REGLA, regla_id=None)
+
+    def olvidar(self, cuenta_id: int) -> None:
+        """Descarta las reglas en caché de la cuenta (por ejemplo, tras deshacer
+        una simulación)."""
+        self._cache.pop(cuenta_id, None)
+
+    def _reglas_de(self, cuenta_id: int):
+        if cuenta_id not in self._cache:
+            reglas = []
+            for regla in self._reglas.historial(cuenta_id):
+                estrategia = registro.obtener(regla.estrategia)
+                reglas.append(
+                    (regla, estrategia, estrategia.Parametros.model_validate(regla.parametros))
+                )
+            self._cache[cuenta_id] = reglas
+        return self._cache[cuenta_id]
 
     def crear_regla(
         self,
@@ -117,6 +151,7 @@ class ServicioAsignacion:
             anterior.vigente_hasta = vigente_desde
             self._sesion.flush()
 
+        self._cache.pop(cuenta_id, None)
         return self._reglas.agregar(
             ReglaAsignacion(
                 cuenta_id=cuenta_id,

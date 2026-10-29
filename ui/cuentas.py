@@ -22,6 +22,7 @@ from panel.db.repositorios.cuentas import RepositorioCuentas, RepositorioReglas
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.fuentes.cuentas import cuentas_de_chatwoot, cuentas_de_cloudtalk
 from panel.servicios.cuentas import ServicioCuentas
+from panel.servicios.interacciones import ResumenReasignacion, ServicioInteracciones
 from ui import formularios_asignacion
 
 NOMBRES_PLATAFORMA = {"cloudtalk": "CloudTalk", "chatwoot": "Chatwoot"}
@@ -164,7 +165,7 @@ def _nueva_regla(fabrica: sessionmaker[Session], cuenta_id: int) -> None:
         ultima_desde = ultima.vigente_desde if ultima else None
 
     if len(personas) < 1:
-        st.warning("Primero cargue los asesores en la pestaña Asesores.")
+        st.warning("Primero cargue los asesores en la página Asesores.")
         return
 
     estrategias = registro.disponibles()
@@ -214,26 +215,51 @@ def _nueva_regla(fabrica: sessionmaker[Session], cuenta_id: int) -> None:
         for error in parametros:
             st.warning(error)
 
-    if st.button(
-        "Guardar regla",
-        type="primary",
-        disabled=isinstance(parametros, list),
-        key=f"guardar-{cuenta_id}",
-    ):
-        try:
-            with unidad_de_trabajo(fabrica) as sesion:
-                servicio = ServicioAsignacion(sesion)
-                vigente_desde = DESDE_SIEMPRE if desde_siempre else servicio.inicio_del_dia(dia)
-                servicio.crear_regla(cuenta_id, elegida, parametros, vigente_desde)
-        except ReglaInvalida as error:
-            for mensaje in error.errores:
-                st.error(mensaje)
-            return
-        st.session_state[CLAVE_AVISO] = "Regla guardada."
-        st.rerun()
+    incompleto = isinstance(parametros, list)
+    izquierda, derecha = st.columns(2)
+    previa = izquierda.button("Ver vista previa", disabled=incompleto, key=f"previa-{cuenta_id}")
+    guardar = derecha.button(
+        "Guardar regla", type="primary", disabled=incompleto, key=f"guardar-{cuenta_id}"
+    )
+    if not (previa or guardar):
+        return
+
+    try:
+        with unidad_de_trabajo(fabrica) as sesion:
+            servicio = ServicioInteracciones(sesion)
+            vigente_desde = (
+                DESDE_SIEMPRE if desde_siempre else servicio.asignacion.inicio_del_dia(dia)
+            )
+            if previa:
+                resumen = servicio.simular_regla(cuenta_id, elegida, parametros, vigente_desde)
+            else:
+                servicio.asignacion.crear_regla(cuenta_id, elegida, parametros, vigente_desde)
+                resumen = servicio.reasignar_cuenta(cuenta_id, vigente_desde)
+    except ReglaInvalida as error:
+        for mensaje in error.errores:
+            st.error(mensaje)
+        return
+
+    detalle = _describir_reasignacion(resumen)
+    if previa:
+        st.info("Si guarda esta regla: " + detalle)
+        return
+    st.session_state[CLAVE_AVISO] = "Regla guardada. " + detalle[0].upper() + detalle[1:]
+    st.rerun()
+
+
+def _describir_reasignacion(resumen: ResumenReasignacion) -> str:
+    if not resumen.revisadas:
+        return "Todavía no hay llamadas ni conversaciones de esta cuenta en ese período."
+    reparto = ", ".join(f"{nombre}: {cantidad}" for nombre, cantidad in resumen.por_persona.items())
+    return (
+        f"de las {resumen.revisadas} interacciones del período ({reparto}), "
+        f"cambian de asesor {resumen.cambiaron}. Las asignadas a mano no se tocan."
+    )
 
 
 def mostrar(fabrica: sessionmaker[Session], cfg: Config) -> None:
+    st.title("Cuentas")
     st.caption(
         "Cada cuenta de CloudTalk o de Chatwoot tiene una regla que dice qué asesor "
         "atendió cada llamada o conversación. Las horas son de España."

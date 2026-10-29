@@ -153,3 +153,24 @@ def test_config_es_inmutable():
     cfg = cargar_config(ENTORNO_VALIDO)
     with pytest.raises(ValueError):
         cfg.account_id = 9
+
+
+def test_la_sincronizacion_trae_valores_por_defecto():
+    cfg = cargar_config(ENTORNO_VALIDO)
+    assert (cfg.sync_intervalo_minutos, cfg.sync_dias_iniciales, cfg.chatwoot_dias_relectura) == (
+        15,
+        30,
+        14,
+    )
+
+
+def test_la_sincronizacion_toma_sus_valores_del_entorno():
+    cfg = cargar_config({**ENTORNO_VALIDO, "SYNC_INTERVALO_MINUTOS": " 5 ", "SYNC_DIAS_INICIALES": "90"})
+    assert (cfg.sync_intervalo_minutos, cfg.sync_dias_iniciales) == (5, 90)
+
+
+@pytest.mark.parametrize("valor", ["0", "-3", "diez", "1.5"])
+def test_la_sincronizacion_rechaza_valores_no_positivos(valor):
+    with pytest.raises(ConfigError) as error:
+        cargar_config({**ENTORNO_VALIDO, "SYNC_INTERVALO_MINUTOS": valor})
+    assert "SYNC_INTERVALO_MINUTOS" in str(error.value)

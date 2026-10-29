@@ -11,13 +11,17 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
+    Integer,
     String,
+    Text,
     UniqueConstraint,
+    false,
     func,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
 from panel.db.base import Base, MarcasDeTiempo
 from panel.esquemas.personas import AREAS
@@ -116,3 +120,131 @@ class ReglaAsignacion(Base):
             name="ex_reglas_asignacion_vigencias_sin_superponer",
         ),
     )
+
+
+class Cliente(MarcasDeTiempo, Base):
+    """Un cliente, identificado por su teléfono normalizado. Une sus llamadas y
+    sus conversaciones de Chatwoot."""
+
+    __tablename__ = "clientes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # E.164 (+34612345678); si no se pudo interpretar, solo los dígitos.
+    telefono: Mapped[str] = mapped_column(String(32), unique=True)
+    telefono_original: Mapped[str] = mapped_column(String(64))
+    nombre: Mapped[str | None] = mapped_column(String(200))
+    revisar: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+
+ASIGNACION_AUTOMATICA = "automatica"
+ASIGNACION_MANUAL = "manual"
+ORIGENES_ASIGNACION = (ASIGNACION_AUTOMATICA, ASIGNACION_MANUAL)
+
+
+class Asignable:
+    """Quién atendió una interacción y por qué.
+
+    `persona_id` vacío es «sin asignar». Una asignación `manual` la eligió el
+    auditor y la sincronización nunca la pisa; una `automatica` sale de la
+    regla de la cuenta y se recalcula si la regla cambia.
+    """
+
+    asignacion: Mapped[str] = mapped_column(
+        String(20), default=ASIGNACION_AUTOMATICA, server_default=ASIGNACION_AUTOMATICA
+    )
+    motivo_asignacion: Mapped[str] = mapped_column(Text, default="", server_default="")
+
+    @declared_attr
+    def persona_id(cls) -> Mapped[int | None]:
+        return mapped_column(ForeignKey("personas.id", ondelete="RESTRICT"))
+
+    @declared_attr
+    def regla_id(cls) -> Mapped[int | None]:
+        return mapped_column(ForeignKey("reglas_asignacion.id", ondelete="RESTRICT"))
+
+    @declared_attr
+    def cliente_id(cls) -> Mapped[int | None]:
+        return mapped_column(ForeignKey("clientes.id", ondelete="RESTRICT"))
+
+    @classmethod
+    def _restriccion_asignacion(cls) -> CheckConstraint:
+        return CheckConstraint(
+            "asignacion IN (" + ", ".join(f"'{o}'" for o in ORIGENES_ASIGNACION) + ")",
+            name="asignacion_valida",
+        )
+
+
+class Llamada(Asignable, MarcasDeTiempo, Base):
+    """Una llamada contestada de CloudTalk."""
+
+    __tablename__ = "llamadas"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    id_externo: Mapped[str] = mapped_column(String(64), unique=True)
+    cuenta_id: Mapped[int] = mapped_column(ForeignKey("cuentas.id", ondelete="RESTRICT"))
+    inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    duracion_s: Mapped[int | None] = mapped_column(Integer)
+    direccion: Mapped[str] = mapped_column(String(20))  # entrante, saliente, interna
+    grabada: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # La página de la llamada en CloudTalk Analytics (`Cdr.recording_link`).
+    enlace_plataforma: Mapped[str | None] = mapped_column(Text)
+    # Lo que devolvió la API, tal cual, para no tener que volver a pedirlo si
+    # después hace falta otro campo.
+    datos_origen: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    cuenta: Mapped[Cuenta] = relationship()
+    persona: Mapped[Persona | None] = relationship()
+    cliente: Mapped[Cliente | None] = relationship()
+
+    __table_args__ = (
+        Asignable._restriccion_asignacion(),
+        Index("ix_llamadas_inicio", "inicio"),
+        Index("ix_llamadas_cuenta_id_inicio", "cuenta_id", "inicio"),
+        Index("ix_llamadas_persona_id", "persona_id"),
+        Index("ix_llamadas_cliente_id", "cliente_id"),
+    )
+
+
+class Conversacion(Asignable, MarcasDeTiempo, Base):
+    """Una conversación de Chatwoot. La cuenta es el usuario asignado; sin
+    usuario asignado queda sin cuenta y sin asignar."""
+
+    __tablename__ = "conversaciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    id_externo: Mapped[str] = mapped_column(String(64), unique=True)
+    cuenta_id: Mapped[int | None] = mapped_column(ForeignKey("cuentas.id", ondelete="RESTRICT"))
+    inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ultima_actividad: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    canal: Mapped[str] = mapped_column(String(200))  # nombre de la bandeja
+    estado: Mapped[str] = mapped_column(String(20))
+    etiquetas: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    direccion: Mapped[str] = mapped_column(String(20))  # Entrante, Saliente, Indeterminado
+    cierre: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cierre_aproximado: Mapped[bool] = mapped_column(default=False, server_default=false())
+    datos_origen: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    cuenta: Mapped[Cuenta | None] = relationship()
+    persona: Mapped[Persona | None] = relationship()
+    cliente: Mapped[Cliente | None] = relationship()
+
+    __table_args__ = (
+        Asignable._restriccion_asignacion(),
+        Index("ix_conversaciones_inicio", "inicio"),
+        Index("ix_conversaciones_cuenta_id_inicio", "cuenta_id", "inicio"),
+        Index("ix_conversaciones_persona_id", "persona_id"),
+        Index("ix_conversaciones_cliente_id", "cliente_id"),
+    )
+
+
+class PuntoSincronizacion(Base):
+    """Hasta dónde llegó la sincronización de cada fuente, y cómo le fue."""
+
+    __tablename__ = "puntos_sincronizacion"
+
+    fuente: Mapped[str] = mapped_column(String(50), primary_key=True)
+    hasta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ultimo_intento: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ultimo_exito: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ultimo_error: Mapped[str | None] = mapped_column(Text)
+    resumen: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
