@@ -32,7 +32,15 @@ tres grupos.
 - **Llamadas** y **Conversaciones**: listado con filtros (fechas, asesor,
   cuenta, cliente por nombre o teléfono, solo sin asignar) y descarga en CSV.
   Al elegir una fila se ve el detalle, el enlace a CloudTalk o a Chatwoot y se
-  puede cambiar el asesor a mano.
+  puede cambiar el asesor a mano o ir al historial del cliente.
+- **Historial del cliente**: se busca un teléfono en cualquier formato
+  (`612 345 678`, `+34…`, `0034…`, o una parte) o un nombre, y se ven todas sus
+  llamadas y chats en una línea de tiempo, con el asesor que atendió cada uno y
+  cuántas veces atendió cada asesor. Al elegir un chat se lee la conversación
+  completa (mensajes del cliente, del asesor, notas internas y actividad); al
+  elegir una llamada, el enlace a CloudTalk. Desde ahí también se cambia el
+  asesor. La casilla *Teléfonos por revisar* muestra los números que no se
+  pudieron interpretar.
 
 **Configuración**:
 
@@ -205,8 +213,12 @@ regla de su cuenta.
   Una conversación que cambia más allá de ese plazo no se actualiza.
 - **Sin duplicados**: se guarda por id de la plataforma; repetir un ciclo
   actualiza lo que ya estaba.
-- **Mensajes de Chatwoot**: se piden solo de las conversaciones nuevas o cuya
-  última actividad cambió, para calcular la dirección y el cierre.
+- **Mensajes de Chatwoot**: se guardan en la base, para leer el chat en el
+  historial del cliente y calcular la dirección y el cierre. Se piden solo de
+  las conversaciones nuevas, las que cambiaron o las que todavía no los tienen
+  (por ejemplo, las guardadas antes de esta versión: las de los últimos
+  `CHATWOOT_DIAS_RELECTURA` días se completan en el próximo ciclo, y las más
+  viejas al cargar su rango con `--desde`).
 - **Clientes**: el teléfono se normaliza a formato internacional (`+34…` si no
   trae código de país), así una llamada y un chat del mismo número quedan
   ligados al mismo cliente. Los números que no se pueden interpretar se

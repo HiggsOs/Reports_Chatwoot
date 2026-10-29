@@ -83,14 +83,19 @@ class ServicioInteracciones:
         self._sesion.flush()
         return resumen
 
-    def ultima_actividad_guardada(self, ids_externos: list[str]) -> dict[str, datetime | None]:
-        """Para saber qué conversaciones cambiaron y necesitan sus mensajes."""
+    def ultima_actividad_guardada(
+        self, ids_externos: list[str]
+    ) -> dict[str, tuple[datetime | None, bool]]:
+        """id externo → (última actividad guardada, si tiene los mensajes
+        guardados). Para saber qué conversaciones necesitan pedir sus mensajes."""
         return {
-            id_externo: ultima
-            for id_externo, ultima in self._sesion.execute(
-                select(Conversacion.id_externo, Conversacion.ultima_actividad).where(
-                    Conversacion.id_externo.in_(ids_externos)
-                )
+            id_externo: (ultima, tiene_mensajes)
+            for id_externo, ultima, tiene_mensajes in self._sesion.execute(
+                select(
+                    Conversacion.id_externo,
+                    Conversacion.ultima_actividad,
+                    Conversacion.mensajes.is_not(None),
+                ).where(Conversacion.id_externo.in_(ids_externos))
             )
         }
 
@@ -127,6 +132,7 @@ class ServicioInteracciones:
                 externa.telefono_cliente, externa.nombre_cliente
             )
             if mensajes is not None:
+                conversacion.mensajes = mensajes
                 conversacion.direccion = detectar_direccion(mensajes)
                 cierre, aproximado = detectar_cierre(externa.datos_origen, mensajes)
                 conversacion.cierre = cierre

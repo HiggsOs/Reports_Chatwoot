@@ -278,6 +278,11 @@ def test_chat_y_llamada_del_mismo_telefono_comparten_cliente(fabrica, personas):
 
 def test_ultima_actividad_guardada(fabrica, personas):
     ultima = MAÑANA + timedelta(hours=1)
-    guardar_conversaciones(fabrica, (conversacion("5", None, ultima=ultima), []))
+    guardar_conversaciones(
+        fabrica, (conversacion("5", None, ultima=ultima), []), (conversacion("7", None), None)
+    )
     with unidad_de_trabajo(fabrica) as sesion:
-        assert ServicioInteracciones(sesion).ultima_actividad_guardada(["5", "6"]) == {"5": ultima}
+        assert ServicioInteracciones(sesion).ultima_actividad_guardada(["5", "6", "7"]) == {
+            "5": (ultima, True),
+            "7": (MAÑANA, False),
+        }

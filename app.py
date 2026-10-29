@@ -23,6 +23,7 @@ from panel.db.base import (
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.importar_asesores import importar_asesores_csv
 from ui import asesores as ui_asesores
+from ui import clientes as ui_clientes
 from ui import cuentas as ui_cuentas
 from ui import en_vivo as ui_en_vivo
 from ui import inicio as ui_inicio
@@ -109,6 +110,8 @@ def pagina(funcion, titulo: str, ruta: str, icono: str, **extra) -> st.Page:
     return st.Page(partial(funcion, **extra), title=titulo, url_path=ruta, icon=icono)
 
 
+historial = pagina(ui_clientes.mostrar, "Historial del cliente", "historial", "🧾",
+                   fabrica=FABRICA, cfg=CFG)
 sin_asignar = pagina(ui_interacciones.sin_asignar, "Sin asignar", "sin-asignar", "📥",
                      fabrica=FABRICA, cfg=CFG)
 cuentas = pagina(ui_cuentas.mostrar, "Cuentas", "cuentas", "🗂️", fabrica=FABRICA, cfg=CFG)
@@ -126,9 +129,10 @@ navegacion = st.navigation(
             inicio,
             sin_asignar,
             pagina(ui_interacciones.pagina, "Llamadas", "llamadas", "📞",
-                   fabrica=FABRICA, cfg=CFG, tipo="llamada"),
+                   fabrica=FABRICA, cfg=CFG, tipo="llamada", historial=historial),
             pagina(ui_interacciones.pagina, "Conversaciones", "conversaciones", "💬",
-                   fabrica=FABRICA, cfg=CFG, tipo="conversacion"),
+                   fabrica=FABRICA, cfg=CFG, tipo="conversacion", historial=historial),
+            historial,
         ],
         "Configuración": [
             pagina(ui_asesores.mostrar, "Asesores", "asesores", "👥",

@@ -223,6 +223,9 @@ class Conversacion(Asignable, MarcasDeTiempo, Base):
     cierre: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cierre_aproximado: Mapped[bool] = mapped_column(default=False, server_default=false())
     datos_origen: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    # Los mensajes tal como los devuelve Chatwoot, para leer el chat sin volver
+    # a pedirlo. Vacío si la conversación no cambió desde que se guardó sin ellos.
+    mensajes: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
     cuenta: Mapped[Cuenta | None] = relationship()
     persona: Mapped[Persona | None] = relationship()

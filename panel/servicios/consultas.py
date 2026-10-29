@@ -47,6 +47,7 @@ class FilaInteraccion(BaseModel):
     motivo: str
     telefono: str
     cliente: str
+    cliente_id: int | None
 
 
 class FilaLlamada(FilaInteraccion):
@@ -97,6 +98,7 @@ def _comunes(fila, cuenta, persona, cliente, zona) -> dict:
         "motivo": fila.motivo_asignacion,
         "telefono": cliente.telefono if cliente else "",
         "cliente": (cliente.nombre or "") if cliente else "",
+        "cliente_id": fila.cliente_id,
     }
 
 

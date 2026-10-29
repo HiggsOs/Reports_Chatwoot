@@ -631,7 +631,7 @@ Criterios comunes a todas las páginas:
 | 1 ✅ | Base de datos | Configuración Pydantic, SQLAlchemy, Alembic, tabla `personas`, importación de `asesores.csv` | Pestaña Asesores leyendo de la base | La app funciona igual, pero con Postgres |
 | 2 ✅ | Asesores y asignación | Servicios de personas y cuentas; interfaz Strategy de asignación, registro, contexto y estrategias `dueno_unico`, `fijo_y_resto` y `franjas_completas` con sus pruebas | Páginas Personas, Cuentas y Regla de asignación | Se cargan las reglas de cada cuenta |
 | 3 ✅ | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
-| 4 | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
+| 4 ✅ | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
 | 5 | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
 | 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync`, retención de 3 años | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
 | 7 | Auditorías | Fichas, auditorías y cálculo de nota | Fichas, Auditar y Auditorías | Se audita |
@@ -657,6 +657,17 @@ Decisiones de la etapa 3:
   creación, y una conversación cambia después de creada.
 - Cada llamada y conversación guarda lo que devolvió la API (`datos_origen`),
   para no tener que volver a pedirlo si después hace falta otro campo.
+
+Decisiones de la etapa 4:
+
+- Los mensajes de cada conversación se guardan en `conversaciones.mensajes`
+  (migración 0004): la sincronización ya los pedía para la dirección y el
+  cierre, y así el chat se lee en el historial sin volver a pedirlo a Chatwoot.
+  También se piden para las conversaciones que todavía no los tienen.
+- La búsqueda por teléfono acepta cualquier formato o una parte del número, y
+  también busca por nombre del cliente.
+- Auditar desde el historial llega con la etapa 7; por ahora el historial
+  permite cambiar el asesor y abrir la interacción en su plataforma.
 La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
 etapa.
 

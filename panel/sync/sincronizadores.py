@@ -145,9 +145,10 @@ class SincronizadorConversaciones(Sincronizador):
         return min(anterior, hasta - self._relectura)
 
     def traer(self, desde, hasta):
-        """Las conversaciones del rango y, de las nuevas o cambiadas, sus
-        mensajes (para la dirección y el cierre). Los mensajes se piden fuera
-        de la transacción de guardado, que así dura poco."""
+        """Las conversaciones del rango y, de las nuevas, las cambiadas y las
+        que todavía no tienen sus mensajes guardados, sus mensajes (para leer el
+        chat, la dirección y el cierre). Los mensajes se piden fuera de la
+        transacción de guardado, que así dura poco."""
         conversaciones = self._fuente.conversaciones(desde, hasta)
         with unidad_de_trabajo(self._fabrica) as sesion:
             guardadas = ServicioInteracciones(sesion).ultima_actividad_guardada(
@@ -155,10 +156,8 @@ class SincronizadorConversaciones(Sincronizador):
             )
         datos = []
         for conversacion in conversaciones:
-            cambio = (
-                conversacion.id_externo not in guardadas
-                or guardadas[conversacion.id_externo] != conversacion.ultima_actividad
-            )
+            ultima, tiene_mensajes = guardadas.get(conversacion.id_externo, (None, False))
+            cambio = not tiene_mensajes or ultima != conversacion.ultima_actividad
             mensajes = self._fuente.mensajes(conversacion.id_externo) if cambio else None
             datos.append((conversacion, mensajes))
         return datos

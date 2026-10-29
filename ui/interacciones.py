@@ -20,6 +20,9 @@ from panel.db.repositorios.personas import RepositorioPersonas
 from panel.servicios import consultas
 from panel.servicios.interacciones import SIN_ASIGNAR, ServicioInteracciones
 
+# El cliente que eligió otra página para abrir en Historial del cliente.
+CLAVE_CLIENTE_ELEGIDO = "cliente_elegido"
+
 COLUMNAS_COMUNES = {
     "inicio": "Fecha",
     "cuenta": "Cuenta",
@@ -131,7 +134,8 @@ def _personas(fabrica):
         return RepositorioPersonas(sesion).listar()
 
 
-def pagina(fabrica: sessionmaker[Session], cfg: Config, tipo: str) -> None:
+def pagina(fabrica: sessionmaker[Session], cfg: Config, tipo: str, historial=None) -> None:
+    """`historial`: la página Historial del cliente, para ir directo desde el detalle."""
     vista = VISTAS[tipo]
     st.title(vista.titulo)
     personas = _personas(fabrica)
@@ -199,10 +203,10 @@ def pagina(fabrica: sessionmaker[Session], cfg: Config, tipo: str) -> None:
 
     seleccion = evento.selection.rows if evento else []
     if seleccion:
-        _detalle(fabrica, cfg, vista, filas[seleccion[0]], personas)
+        _detalle(fabrica, cfg, vista, filas[seleccion[0]], personas, historial)
 
 
-def _detalle(fabrica, cfg, vista: Vista, fila, personas) -> None:
+def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial) -> None:
     st.subheader(f"{vista.titulo[:-1]} {fila.id_externo}")
     datos = {
         "Fecha": f"{fila.inicio:%d/%m/%Y %H:%M}",
@@ -213,29 +217,41 @@ def _detalle(fabrica, cfg, vista: Vista, fila, personas) -> None:
     }
     for etiqueta, valor in datos.items():
         st.markdown(f"**{etiqueta}:** {valor}")
+    izquierda, derecha = st.columns(2)
     if enlace := vista.enlace(fila, cfg):
-        st.link_button(enlace[0], enlace[1])
+        izquierda.link_button(enlace[0], enlace[1])
+    if fila.cliente_id is not None and historial is not None:
+        if derecha.button("Ver historial del cliente", key=f"{vista.tipo}-{fila.id}-historial"):
+            st.session_state[CLAVE_CLIENTE_ELEGIDO] = fila.cliente_id
+            st.switch_page(historial)
 
+    editor_asignacion(fabrica, vista.tipo, fila.id, fila.persona_id, fila.asignacion, personas)
+
+
+def editor_asignacion(
+    fabrica, tipo: str, interaccion_id: int, persona_id: int | None, asignacion: str, personas
+) -> None:
+    """Cambiar el asesor a mano, o volver a la asignación automática."""
     ids = [None] + [p.id for p in personas]
     nombres = {p.id: p.etiqueta for p in personas}
     elegida = st.selectbox(
         "Asignar a mano",
         ids,
-        index=ids.index(fila.persona_id) if fila.persona_id in ids else 0,
+        index=ids.index(persona_id) if persona_id in ids else 0,
         format_func=lambda pid: SIN_ASIGNAR if pid is None else nombres[pid],
-        key=f"{vista.tipo}-{fila.id}-persona",
+        key=f"{tipo}-{interaccion_id}-persona",
         help="Una asignación hecha a mano no la cambian ni la sincronización ni las reglas.",
     )
     izquierda, derecha = st.columns(2)
-    if izquierda.button("Guardar asignación", key=f"{vista.tipo}-{fila.id}-guardar"):
+    if izquierda.button("Guardar asignación", key=f"{tipo}-{interaccion_id}-guardar"):
         with unidad_de_trabajo(fabrica) as sesion:
-            ServicioInteracciones(sesion).asignar_manual(vista.tipo, fila.id, elegida)
+            ServicioInteracciones(sesion).asignar_manual(tipo, interaccion_id, elegida)
         st.rerun()
-    if fila.asignacion == "manual" and derecha.button(
-        "Volver a la asignación automática", key=f"{vista.tipo}-{fila.id}-automatica"
+    if asignacion == "manual" and derecha.button(
+        "Volver a la asignación automática", key=f"{tipo}-{interaccion_id}-automatica"
     ):
         with unidad_de_trabajo(fabrica) as sesion:
-            ServicioInteracciones(sesion).volver_a_automatica(vista.tipo, fila.id)
+            ServicioInteracciones(sesion).volver_a_automatica(tipo, interaccion_id)
         st.rerun()
 
 

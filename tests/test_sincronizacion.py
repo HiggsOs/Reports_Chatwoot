@@ -7,6 +7,7 @@ from panel.db.base import unidad_de_trabajo
 from panel.db.modelos import Conversacion, Llamada, PuntoSincronizacion
 from panel.fuentes.cuentas import CuentaExterna
 from panel.fuentes.interacciones import ConversacionExterna, LlamadaExterna
+from panel.servicios.interacciones import ServicioInteracciones
 from panel.sync.sincronizadores import (
     CLAVE_BLOQUEO_SINCRONIZACION,
     SincronizadorConversaciones,
@@ -179,3 +180,13 @@ def test_el_bloqueo_se_libera_al_terminar(fabrica, veces):
     fuente = FuenteLlamadasFalsa()
     for _ in range(veces):
         assert ejecutar_ciclo(fabrica, [sincronizador_llamadas(fabrica, fuente)]) is not None
+
+
+def test_pide_los_mensajes_que_faltan_aunque_la_conversacion_no_cambie(fabrica):
+    ultima = AHORA - timedelta(hours=3)
+    with unidad_de_trabajo(fabrica) as sesion:
+        # Guardada por una versión anterior, sin mensajes.
+        ServicioInteracciones(sesion).guardar_conversaciones([(conversacion("1", ultima), None)])
+    fuente = FuenteConversacionesFalsa([conversacion("1", ultima)])
+    SincronizadorConversaciones(fabrica, fuente, INICIAL, 14, ahora=lambda: AHORA).ejecutar()
+    assert fuente.mensajes_pedidos == ["1"]
