@@ -19,10 +19,31 @@ from panel.db.repositorios.cuentas import RepositorioCuentas
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.servicios import consultas
 from panel.servicios.interacciones import SIN_ASIGNAR, ServicioInteracciones
+from ui import transcripcion as ui_transcripcion
 from ui.audio import etiqueta_estado, reproductor
 
 # El cliente que eligió otra página para abrir en Historial del cliente.
 CLAVE_CLIENTE_ELEGIDO = "cliente_elegido"
+
+
+def fila_elegida(clave: str, evento, filas, identificar):
+    """La fila que se está viendo en detalle.
+
+    Streamlit olvida la fila elegida cuando cambian los datos de la tabla (por
+    ejemplo, al transcribir o asignar), así que se recuerda por su id hasta que
+    se elija otra o se cierre el detalle.
+    """
+    seleccion = evento.selection.rows if evento else []
+    if seleccion and seleccion[0] < len(filas):
+        st.session_state[clave] = identificar(filas[seleccion[0]])
+    elegida = st.session_state.get(clave)
+    return next((f for f in filas if identificar(f) == elegida), None)
+
+
+def cerrar_detalle(clave: str) -> None:
+    if st.button("Cerrar el detalle", key=f"{clave}-cerrar"):
+        st.session_state.pop(clave, None)
+        st.rerun()
 
 COLUMNAS_COMUNES = {
     "inicio": "Fecha",
@@ -75,6 +96,7 @@ VISTAS = {
             "duracion_s": "Duración (s)",
             "grabada": "Grabada",
             "audio_estado": "Audio",
+            "transcripcion_estado": "Transcripción",
         },
         archivo="llamadas",
         enlace=_enlace_llamada,
@@ -130,6 +152,10 @@ def _tabla(filas: list[consultas.FilaInteraccion], columnas: dict[str, str]) -> 
         datos["Cierre"] = pd.to_datetime(datos["Cierre"]).dt.strftime("%d/%m/%Y %H:%M")
     if "Audio" in datos:
         datos["Audio"] = datos["Audio"].map(etiqueta_estado)
+    if "Transcripción" in datos:
+        datos["Transcripción"] = datos["Transcripción"].map(
+            {"transcrita": "sí", "eliminada": "borrada por plazo"}
+        ).fillna("")
     return datos
 
 
@@ -139,10 +165,16 @@ def _personas(fabrica):
 
 
 def pagina(
-    fabrica: sessionmaker[Session], cfg: Config, tipo: str, historial=None, audio=None
+    fabrica: sessionmaker[Session],
+    cfg: Config,
+    tipo: str,
+    historial=None,
+    audio=None,
+    transcripcion=None,
 ) -> None:
     """`historial`: la página Historial del cliente, para ir directo desde el
-    detalle. `audio`: el servicio de audio, para escuchar las llamadas."""
+    detalle. `audio` y `transcripcion`: los servicios, para escuchar y
+    transcribir las llamadas."""
     vista = VISTAS[tipo]
     st.title(vista.titulo)
     personas = _personas(fabrica)
@@ -208,12 +240,17 @@ def pagina(
         key=f"{tipo}-csv",
     )
 
-    seleccion = evento.selection.rows if evento else []
-    if seleccion:
-        _detalle(fabrica, cfg, vista, filas[seleccion[0]], personas, historial, audio)
+    if vista.tipo == "llamada":
+        ui_transcripcion.lote(transcripcion, filas)
+
+    clave = f"{tipo}-elegida"
+    fila = fila_elegida(clave, evento, filas, lambda f: f.id)
+    if fila is not None:
+        _detalle(fabrica, cfg, vista, fila, personas, historial, audio, transcripcion)
+        cerrar_detalle(clave)
 
 
-def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial, audio) -> None:
+def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial, audio, transcripcion) -> None:
     st.subheader(f"{vista.titulo[:-1]} {fila.id_externo}")
     datos = {
         "Fecha": f"{fila.inicio:%d/%m/%Y %H:%M}",
@@ -234,6 +271,7 @@ def _detalle(fabrica, cfg, vista: Vista, fila, personas, historial, audio) -> No
 
     if vista.tipo == "llamada":
         reproductor(audio, fila.id, cfg.audio_retencion_dias)
+        ui_transcripcion.panel(transcripcion, fila.id)
     editor_asignacion(fabrica, vista.tipo, fila.id, fila.persona_id, fila.asignacion, personas)
 
 

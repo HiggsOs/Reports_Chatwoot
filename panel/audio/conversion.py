@@ -27,7 +27,10 @@ class InfoAudio(BaseModel):
     frecuencia_hz: int | None
 
 
-def _ejecutar(comando: list[str], entrada: bytes) -> bytes:
+def _ejecutar(comando: list[str], entrada: bytes, salida_de_error: bool = False) -> bytes:
+    """Corre el comando con el audio por la entrada. Devuelve la salida, o la
+    salida de error si `salida_de_error` (ahí escriben sus mediciones los
+    filtros de ffmpeg)."""
     try:
         resultado = subprocess.run(
             comando,
@@ -41,7 +44,7 @@ def _ejecutar(comando: list[str], entrada: bytes) -> bytes:
     if resultado.returncode != 0:
         detalle = resultado.stderr.decode("utf-8", "replace").strip()[-300:]
         raise AudioInvalido(f"{comando[0]} no pudo procesar el audio: {detalle}")
-    return resultado.stdout
+    return resultado.stderr if salida_de_error else resultado.stdout
 
 
 def analizar(audio: bytes) -> InfoAudio:
@@ -84,6 +87,58 @@ def a_mp3(audio: bytes, canales: int) -> bytes:
             "-ac", "2" if estereo else "1",
             "-b:a", BITRATE_ESTEREO if estereo else BITRATE_MONO,
             "-f", "mp3", "pipe:1",
+        ],
+        audio,
+    )
+
+
+# Por debajo de este volumen, la diferencia entre los dos canales es silencio:
+# es un «estéreo» con el mismo audio en ambos lados.
+UMBRAL_CANALES_IGUALES_DB = -40.0
+
+
+def canales_iguales(audio: bytes) -> bool:
+    """Si los dos canales de un estéreo tienen el mismo audio.
+
+    Mide el volumen máximo de la resta de los canales: si es silencio, son
+    iguales.
+    """
+    errores = _ejecutar(
+        [
+            "ffmpeg", "-hide_banner", "-nostats", "-i", "pipe:0",
+            "-af", "pan=mono|c0=c0-c1,volumedetect", "-f", "null", "-",
+        ],
+        audio,
+        salida_de_error=True,
+    ).decode("utf-8", "replace")
+    for linea in errores.splitlines():
+        if "max_volume:" in linea:
+            valor = linea.split("max_volume:")[1].strip().split()[0]
+            return valor == "-inf" or float(valor) < UMBRAL_CANALES_IGUALES_DB
+    return False
+
+
+def extraer_canal(audio: bytes, canal: int) -> bytes:
+    """Un canal (0 = izquierdo, 1 = derecho) como MP3 mono."""
+    return _ejecutar(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+            "-af", f"pan=mono|c0=c{canal}", "-b:a", BITRATE_MONO, "-f", "mp3", "pipe:1",
+        ],
+        audio,
+    )
+
+
+def a_mono(audio: bytes) -> bytes:
+    return a_mp3(audio, canales=1)
+
+
+def recortar(audio: bytes, desde_s: float, duracion_s: float) -> bytes:
+    """Un tramo del MP3, sin volver a codificarlo."""
+    return _ejecutar(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", f"{desde_s:.3f}",
+            "-t", f"{duracion_s:.3f}", "-i", "pipe:0", "-c", "copy", "-f", "mp3", "pipe:1",
         ],
         audio,
     )

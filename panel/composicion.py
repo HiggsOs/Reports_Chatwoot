@@ -19,7 +19,16 @@ from panel.sync.sincronizadores import (
     SincronizadorConversaciones,
     SincronizadorLlamadas,
 )
-from panel.sync.tareas import RetencionDeAudios, SubirAudiosPendientes, Tarea
+from panel.sync.tareas import (
+    ProcesarTranscripciones,
+    RetencionDeAudios,
+    RetencionDeTranscripciones,
+    SubirAudiosPendientes,
+    Tarea,
+)
+from panel.transcripcion import registro as registro_transcripcion
+from panel.transcripcion.base import OpcionesTranscripcion
+from panel.transcripcion.servicio import ServicioTranscripcion
 
 
 def cliente_cloudtalk(cfg: Config) -> ClienteCloudTalk:
@@ -58,6 +67,29 @@ def servicio_audio(fabrica: sessionmaker[Session], cfg: Config) -> ServicioAudio
     )
 
 
+def servicio_transcripcion(
+    fabrica: sessionmaker[Session], cfg: Config, audio: ServicioAudio | None
+) -> ServicioTranscripcion | None:
+    """None si no hay de dónde sacar el audio o si el proveedor elegido no está
+    configurado (por ejemplo, falta su clave)."""
+    if audio is None or not cfg.transcripcion_proveedor:
+        return None
+    estrategias = registro_transcripcion.disponibles(cfg.entorno)
+    cadena = [cfg.transcripcion_proveedor, *cfg.transcripcion_respaldo]
+    if cfg.transcripcion_proveedor not in estrategias:
+        return None
+    return ServicioTranscripcion(
+        fabrica,
+        audio,
+        estrategias,
+        cadena,
+        OpcionesTranscripcion(
+            idioma=cfg.transcripcion_idioma, vocabulario=cfg.transcripcion_vocabulario
+        ),
+        cfg.cloudtalk_canal_agente,
+    )
+
+
 def sincronizadores(fabrica: sessionmaker[Session], cfg: Config) -> list[Sincronizador | Tarea]:
     """Lo que corre en cada ciclo: primero traer datos, después mantenimiento."""
     desde_inicial = datetime.now(timezone.utc) - timedelta(days=cfg.sync_dias_iniciales)
@@ -75,4 +107,10 @@ def sincronizadores(fabrica: sessionmaker[Session], cfg: Config) -> list[Sincron
     if audio is not None and audio.guarda_audios:
         lista.append(SubirAudiosPendientes(fabrica, audio))
         lista.append(RetencionDeAudios(fabrica, audio))
+    transcripcion = servicio_transcripcion(fabrica, cfg, audio)
+    if transcripcion is not None:
+        lista.append(ProcesarTranscripciones(fabrica, transcripcion, cfg.transcripcion_por_ciclo))
+    # La retención de transcripciones corre aunque no haya proveedor: las ya
+    # guardadas también vencen.
+    lista.append(RetencionDeTranscripciones(fabrica, cfg.transcripcion_retencion_dias))
     return lista

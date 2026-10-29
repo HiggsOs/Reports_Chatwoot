@@ -7,18 +7,23 @@ crea; nunca se edita una migración ya aplicada.
 from datetime import datetime
 from typing import Any
 
+from decimal import Decimal
+
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     false,
     func,
+    text,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
@@ -182,6 +187,10 @@ AUDIO_VENCIDO = "vencido"  # CloudTalk ya la borró
 AUDIO_ELIMINADO = "eliminado"  # se borró del almacén al cumplir el plazo
 ESTADOS_AUDIO = (AUDIO_GUARDADO, AUDIO_PENDIENTE, AUDIO_SIN_GRABACION, AUDIO_VENCIDO, AUDIO_ELIMINADO)
 
+TRANSCRIPCION_HECHA = "transcrita"
+TRANSCRIPCION_ELIMINADA = "eliminada"
+ESTADOS_TRANSCRIPCION = (TRANSCRIPCION_HECHA, TRANSCRIPCION_ELIMINADA)
+
 
 class Llamada(Asignable, MarcasDeTiempo, Base):
     """Una llamada contestada de CloudTalk."""
@@ -206,6 +215,8 @@ class Llamada(Asignable, MarcasDeTiempo, Base):
     audio_canales: Mapped[int | None] = mapped_column(Integer)
     audio_bytes: Mapped[int | None] = mapped_column(Integer)
     audio_guardado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # «transcrita», o «eliminada» al cumplir el plazo. Vacío: sin transcribir.
+    transcripcion_estado: Mapped[str | None] = mapped_column(String(20))
 
     cuenta: Mapped[Cuenta] = relationship()
     persona: Mapped[Persona | None] = relationship()
@@ -218,6 +229,12 @@ class Llamada(Asignable, MarcasDeTiempo, Base):
             + ", ".join(f"'{e}'" for e in ESTADOS_AUDIO)
             + ")",
             name="audio_estado_valido",
+        ),
+        CheckConstraint(
+            "transcripcion_estado IS NULL OR transcripcion_estado IN ("
+            + ", ".join(f"'{e}'" for e in ESTADOS_TRANSCRIPCION)
+            + ")",
+            name="transcripcion_estado_valido",
         ),
         Index("ix_llamadas_inicio", "inicio"),
         Index("ix_llamadas_cuenta_id_inicio", "cuenta_id", "inicio"),
@@ -291,4 +308,76 @@ class AudioPendiente(Base):
     ultimo_error: Mapped[str | None] = mapped_column(Text)
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TranscripcionGuardada(Base):
+    """Una transcripción de una llamada. Una llamada puede tener varias (por
+    ejemplo, para comparar proveedores); una sola es la principal."""
+
+    __tablename__ = "transcripciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    llamada_id: Mapped[int] = mapped_column(ForeignKey("llamadas.id", ondelete="CASCADE"))
+    proveedor: Mapped[str] = mapped_column(String(50))
+    modelo: Mapped[str] = mapped_column(String(100))
+    idioma: Mapped[str] = mapped_column(String(10))
+    # mono, estereo o estereo_duplicado: cómo era la grabación.
+    canales_audio: Mapped[str] = mapped_column(String(20))
+    # Lista de Segmento (panel/transcripcion/base.py) en JSON.
+    segmentos: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    texto: Mapped[str] = mapped_column(Text)
+    duracion_audio: Mapped[float | None] = mapped_column(Float)
+    costo_estimado: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    principal: Mapped[bool] = mapped_column(default=False, server_default=false())
+    creado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_transcripciones_llamada_id", "llamada_id"),
+        Index(
+            "uq_transcripciones_una_principal",
+            "llamada_id",
+            unique=True,
+            postgresql_where=text("principal"),
+        ),
+    )
+
+
+TRABAJO_PENDIENTE = "pendiente"
+TRABAJO_EN_PROCESO = "en_proceso"
+TRABAJO_HECHO = "hecho"
+TRABAJO_ERROR = "error"
+ESTADOS_TRABAJO = (TRABAJO_PENDIENTE, TRABAJO_EN_PROCESO, TRABAJO_HECHO, TRABAJO_ERROR)
+
+
+class TrabajoTranscripcion(MarcasDeTiempo, Base):
+    """Un pedido de transcripción en la cola (patrón Command): lo crea el panel
+    y lo procesa la sincronización."""
+
+    __tablename__ = "trabajos_transcripcion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    llamada_id: Mapped[int] = mapped_column(ForeignKey("llamadas.id", ondelete="CASCADE"))
+    proveedor: Mapped[str | None] = mapped_column(String(50))  # vacío: el de siempre
+    estado: Mapped[str] = mapped_column(
+        String(20), default=TRABAJO_PENDIENTE, server_default=TRABAJO_PENDIENTE
+    )
+    intentos: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "estado IN (" + ", ".join(f"'{e}'" for e in ESTADOS_TRABAJO) + ")",
+            name="estado_valido",
+        ),
+        Index("ix_trabajos_transcripcion_estado", "estado", "creado_en"),
+        # Un solo pedido abierto por llamada.
+        Index(
+            "uq_trabajos_transcripcion_uno_abierto",
+            "llamada_id",
+            unique=True,
+            postgresql_where=text("estado IN ('pendiente', 'en_proceso')"),
+        ),
     )

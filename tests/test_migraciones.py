@@ -16,6 +16,8 @@ TABLAS = (
     "conversaciones",
     "puntos_sincronizacion",
     "audios_pendientes",
+    "transcripciones",
+    "trabajos_transcripcion",
 )
 
 

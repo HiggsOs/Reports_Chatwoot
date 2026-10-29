@@ -14,7 +14,7 @@ import streamlit_authenticator as stauth
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ConfigError, cargar_config, ruta_asesores
-from panel.composicion import servicio_audio
+from panel.composicion import servicio_audio, servicio_transcripcion
 from panel.db.base import (
     comprobar_conexion,
     crear_fabrica_sesiones,
@@ -29,6 +29,7 @@ from ui import cuentas as ui_cuentas
 from ui import en_vivo as ui_en_vivo
 from ui import inicio as ui_inicio
 from ui import interacciones as ui_interacciones
+from ui import transcripcion as ui_transcripcion
 
 registro = logging.getLogger(__name__)
 
@@ -56,6 +57,13 @@ def obtener_audio(database_url: str):
     """Uno para toda la app: comparte el cliente de CloudTalk y su control del
     límite de peticiones."""
     return servicio_audio(obtener_fabrica(database_url), CFG)
+
+
+@st.cache_resource
+def obtener_transcripcion(database_url: str):
+    return servicio_transcripcion(
+        obtener_fabrica(database_url), CFG, obtener_audio(database_url)
+    )
 
 
 def leer_areas() -> dict[str, str]:
@@ -113,6 +121,7 @@ autenticador.logout("Cerrar sesión", "sidebar")
 
 FABRICA = obtener_fabrica(CFG.database_url)
 AUDIO = obtener_audio(CFG.database_url)
+TRANSCRIPCION = obtener_transcripcion(CFG.database_url)
 
 
 def pagina(funcion, titulo: str, ruta: str, icono: str, **extra) -> st.Page:
@@ -120,7 +129,7 @@ def pagina(funcion, titulo: str, ruta: str, icono: str, **extra) -> st.Page:
 
 
 historial = pagina(ui_clientes.mostrar, "Historial del cliente", "historial", "🧾",
-                   fabrica=FABRICA, cfg=CFG, audio=AUDIO)
+                   fabrica=FABRICA, cfg=CFG, audio=AUDIO, transcripcion=TRANSCRIPCION)
 sin_asignar = pagina(ui_interacciones.sin_asignar, "Sin asignar", "sin-asignar", "📥",
                      fabrica=FABRICA, cfg=CFG)
 cuentas = pagina(ui_cuentas.mostrar, "Cuentas", "cuentas", "🗂️", fabrica=FABRICA, cfg=CFG)
@@ -138,7 +147,8 @@ navegacion = st.navigation(
             inicio,
             sin_asignar,
             pagina(ui_interacciones.pagina, "Llamadas", "llamadas", "📞",
-                   fabrica=FABRICA, cfg=CFG, tipo="llamada", historial=historial, audio=AUDIO),
+                   fabrica=FABRICA, cfg=CFG, tipo="llamada", historial=historial, audio=AUDIO,
+                   transcripcion=TRANSCRIPCION),
             pagina(ui_interacciones.pagina, "Conversaciones", "conversaciones", "💬",
                    fabrica=FABRICA, cfg=CFG, tipo="conversacion", historial=historial),
             historial,
@@ -147,6 +157,8 @@ navegacion = st.navigation(
             pagina(ui_asesores.mostrar, "Asesores", "asesores", "👥",
                    fabrica=FABRICA, importacion=IMPORTACION),
             cuentas,
+            pagina(ui_transcripcion.pagina, "Transcripción", "transcripcion", "📝",
+                   fabrica=FABRICA, cfg=CFG, transcripcion=TRANSCRIPCION),
         ],
         "Reportes en vivo": [
             pagina(ui_en_vivo.reporte_chatwoot, "Reporte de Chatwoot", "reporte-chatwoot", "📊",

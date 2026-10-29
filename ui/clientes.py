@@ -9,8 +9,9 @@ from panel.db.base import unidad_de_trabajo
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.servicios import clientes
 from panel.servicios.clientes import SIN_ASIGNAR
+from ui import transcripcion as ui_transcripcion
 from ui.audio import reproductor
-from ui.interacciones import CLAVE_CLIENTE_ELEGIDO, editor_asignacion
+from ui.interacciones import CLAVE_CLIENTE_ELEGIDO, cerrar_detalle, editor_asignacion, fila_elegida
 
 TIPOS = {"llamada": "📞 Llamada", "conversacion": "💬 Chat"}
 # Lo que escribe el cliente no debe leerse como formato Markdown.
@@ -35,8 +36,8 @@ def _descripcion(resumen: clientes.ResumenCliente) -> str:
     return " — ".join(partes)
 
 
-def mostrar(fabrica: sessionmaker[Session], cfg: Config, audio=None) -> None:
-    """`audio`: el servicio de audio, para escuchar las llamadas."""
+def mostrar(fabrica: sessionmaker[Session], cfg: Config, audio=None, transcripcion=None) -> None:
+    """`audio` y `transcripcion`: los servicios, para escuchar y transcribir."""
     st.title("Historial del cliente")
     st.caption(
         "Busque un número en cualquier formato (612 345 678, +34 612…, 0034…) o un "
@@ -83,7 +84,7 @@ def mostrar(fabrica: sessionmaker[Session], cfg: Config, audio=None) -> None:
         return
 
     _encabezado(resultado)
-    _linea_de_tiempo(fabrica, cfg, resultado, personas, audio)
+    _linea_de_tiempo(fabrica, cfg, resultado, personas, audio, transcripcion)
 
 
 def _encabezado(resultado: clientes.Historial) -> None:
@@ -103,7 +104,9 @@ def _encabezado(resultado: clientes.Historial) -> None:
     )
 
 
-def _linea_de_tiempo(fabrica, cfg: Config, resultado: clientes.Historial, personas, audio) -> None:
+def _linea_de_tiempo(
+    fabrica, cfg: Config, resultado: clientes.Historial, personas, audio, transcripcion
+) -> None:
     st.subheader("Línea de tiempo")
     tabla = pd.DataFrame(
         [
@@ -126,18 +129,19 @@ def _linea_de_tiempo(fabrica, cfg: Config, resultado: clientes.Historial, person
         selection_mode="single-row",
         key=f"historial-{resultado.cliente.id}",
     )
-    seleccion = evento.selection.rows if evento else []
-    if not seleccion:
+    clave = f"historial-{resultado.cliente.id}-elegido"
+    elemento = fila_elegida(clave, evento, resultado.elementos, lambda e: (e.tipo, e.id))
+    if elemento is None:
         st.caption("Elija una fila para ver la llamada o leer el chat.")
         return
 
-    elemento = resultado.elementos[seleccion[0]]
     st.subheader(f"{TIPOS[elemento.tipo]} del {elemento.inicio:%d/%m/%Y %H:%M}")
     st.markdown(f"**Asesor:** {elemento.asesor or SIN_ASIGNAR} — {elemento.motivo}")
     if elemento.tipo == "llamada":
         if elemento.enlace_plataforma:
             st.link_button("Abrir en CloudTalk", elemento.enlace_plataforma)
         reproductor(audio, elemento.id, cfg.audio_retencion_dias)
+        ui_transcripcion.panel(transcripcion, elemento.id)
     else:
         st.link_button(
             "Abrir en Chatwoot",
@@ -148,6 +152,7 @@ def _linea_de_tiempo(fabrica, cfg: Config, resultado: clientes.Historial, person
     editor_asignacion(
         fabrica, elemento.tipo, elemento.id, elemento.persona_id, elemento.asignacion, personas
     )
+    cerrar_detalle(clave)
 
 
 def _literal(texto: str) -> str:

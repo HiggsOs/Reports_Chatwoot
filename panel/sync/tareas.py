@@ -18,6 +18,7 @@ from panel.audio.servicio import ServicioAudio
 from panel.db.base import unidad_de_trabajo
 from panel.db.modelos import PuntoSincronizacion
 from panel.sync.sincronizadores import ResultadoSincronizacion, ahora_utc
+from panel.transcripcion.servicio import ServicioTranscripcion, borrar_transcripciones_vencidas
 
 registro = logging.getLogger(__name__)
 
@@ -77,14 +78,8 @@ class SubirAudiosPendientes(Tarea):
         return self._audio.subir_pendientes()
 
 
-class RetencionDeAudios(Tarea):
-    """Una vez por día (en hora de España), borra los audios vencidos."""
-
-    nombre = "retencion_audios"
-
-    def __init__(self, fabrica, audio: ServicioAudio, ahora=ahora_utc) -> None:
-        super().__init__(fabrica, ahora)
-        self._audio = audio
+class UnaVezPorDia(Tarea):
+    """Corre como mucho una vez por día, en hora de España."""
 
     def toca_correr(self, ultimo_exito, ahora):
         if ultimo_exito is None:
@@ -92,5 +87,42 @@ class RetencionDeAudios(Tarea):
         zona = ZONA_OPERACION_POR_DEFECTO
         return ultimo_exito.astimezone(zona).date() < ahora.astimezone(zona).date()
 
+
+class RetencionDeAudios(UnaVezPorDia):
+    """Borra los audios de llamadas más viejas que el plazo."""
+
+    nombre = "retencion_audios"
+
+    def __init__(self, fabrica, audio: ServicioAudio, ahora=ahora_utc) -> None:
+        super().__init__(fabrica, ahora)
+        self._audio = audio
+
     def correr(self):
         return self._audio.aplicar_retencion()
+
+
+class ProcesarTranscripciones(Tarea):
+    """Transcribe hasta TRANSCRIPCION_POR_CICLO pedidos de la cola."""
+
+    nombre = "transcripciones"
+
+    def __init__(self, fabrica, transcripcion: ServicioTranscripcion, limite: int, ahora=ahora_utc):
+        super().__init__(fabrica, ahora)
+        self._transcripcion = transcripcion
+        self._limite = limite
+
+    def correr(self):
+        return self._transcripcion.procesar_cola(self._limite)
+
+
+class RetencionDeTranscripciones(UnaVezPorDia):
+    """Borra las transcripciones de llamadas más viejas que el plazo."""
+
+    nombre = "retencion_transcripciones"
+
+    def __init__(self, fabrica, dias: int, ahora=ahora_utc) -> None:
+        super().__init__(fabrica, ahora)
+        self._dias = dias
+
+    def correr(self):
+        return borrar_transcripciones_vencidas(self._fabrica, self._dias, self._ahora())

@@ -18,6 +18,8 @@ NOMBRES_FUENTE = {
     "chatwoot": "Chatwoot (conversaciones)",
     "audios_pendientes": "Audios por subir al servidor",
     "retencion_audios": "Borrado de audios vencidos (una vez por día)",
+    "transcripciones": "Transcripciones en cola",
+    "retencion_transcripciones": "Borrado de transcripciones vencidas (una vez por día)",
 }
 
 

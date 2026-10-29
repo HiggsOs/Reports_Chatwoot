@@ -32,8 +32,8 @@ tres grupos.
 - **Llamadas** y **Conversaciones**: listado con filtros (fechas, asesor,
   cuenta, cliente por nombre o teléfono, solo sin asignar) y descarga en CSV.
   Al elegir una fila se ve el detalle, el enlace a CloudTalk o a Chatwoot y se
-  puede escuchar la llamada, cambiar el asesor a mano o ir al historial del
-  cliente.
+  puede escuchar y transcribir la llamada, cambiar el asesor a mano o ir al
+  historial del cliente.
 - **Historial del cliente**: se busca un teléfono en cualquier formato
   (`612 345 678`, `+34…`, `0034…`, o una parte) o un nombre, y se ven todas sus
   llamadas y chats en una línea de tiempo, con el asesor que atendió cada uno y
@@ -52,6 +52,9 @@ tres grupos.
 - **Cuentas**: las cuentas de CloudTalk (agentes) y de Chatwoot (usuarios), con
   la regla que dice qué asesor atendió cada llamada o conversación. Ver
   *Cuentas y reglas de asignación* más abajo.
+- **Transcripción**: el proveedor configurado, la cola de transcripciones, el
+  gasto del mes y la comparación de dos versiones de una misma llamada. Ver
+  *Transcripción* más abajo.
 
 **Reportes en vivo** (consultan las APIs en el momento, como antes de la base):
 
@@ -88,6 +91,17 @@ a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 | `FTP_DIR` | Carpeta de los audios dentro de esa cuenta. Por defecto `/` |
 | `SFTP_HUELLA_HOST` | Huella del servidor SFTP (`SHA256:…`); ver *Audio de las llamadas* |
 | `AUDIO_RETENCION_DIAS` | Días que se guarda un audio, desde la fecha de la llamada. Por defecto `90` |
+| `TRANSCRIPCION_PROVEEDOR` | Quién transcribe: `openai` (por defecto si hay `OPENAI_API_KEY`) o `falsa` (texto fijo, para pruebas). Vacío y sin clave: la transcripción está apagada |
+| `TRANSCRIPCION_RESPALDO` | Proveedores a probar si falla el principal, separados por coma |
+| `TRANSCRIPCION_IDIOMA` | Por defecto `es` |
+| `TRANSCRIPCION_VOCABULARIO` | Palabras propias separadas por coma (marcas, productos), para que el modelo las escriba bien |
+| `TRANSCRIPCION_POR_CICLO` | Cuántos pedidos de la cola transcribe cada ciclo de la sincronización. Por defecto `20` |
+| `TRANSCRIPCION_RETENCION_DIAS` | Días que se guarda una transcripción, desde la fecha de la llamada. Por defecto `1095` (3 años) |
+| `CLOUDTALK_CANAL_AGENTE` | En una grabación estéreo, qué canal es el del agente: `izquierdo` (por defecto) o `derecho` |
+| `OPENAI_API_KEY` | Clave de la API de OpenAI |
+| `OPENAI_MODELO_TRANSCRIPCION` | Por defecto `gpt-4o-transcribe-diarize` |
+| `OPENAI_FORMATO_RESPUESTA` | Solo para un modelo que el código no conoce: `diarized_json`, `verbose_json` o `json` |
+| `OPENAI_PRECIO_MINUTO` | Precio por minuto de audio en USD, para el costo estimado. Sin valor, el panel no muestra costos |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -289,6 +303,42 @@ volver a CloudTalk.
    hosting cambia la clave del servidor, hay que volver a obtenerla.
 4. Cargar `ALMACEN_TIPO=sftp` y las variables `FTP_*` en **los dos servicios**
    de EasyPanel (la app y la sincronización).
+
+## Transcripción
+
+En el detalle de una llamada, *Transcribir* la transcribe en el momento y
+muestra el diálogo con la hora de cada intervención. En *Llamadas*, *Transcribir
+en lote* agrega a la cola las llamadas filtradas que todavía no tienen
+transcripción, con el costo estimado antes de confirmar; la sincronización las
+transcribe de a `TRANSCRIPCION_POR_CICLO` por ciclo y reintenta tres veces cada
+una. La página *Transcripción* muestra la cola, los errores (con un botón para
+reintentar), lo gastado en el mes y dos transcripciones de la misma llamada lado
+a lado.
+
+**Quién habla.** Antes de transcribir se mira la grabación:
+
+- **Estéreo con una persona por canal**: cada canal se transcribe aparte, así
+  que cada frase queda como *Agente* o *Cliente* sin dudas. El canal del agente
+  se configura con `CLOUDTALK_CANAL_AGENTE`: conviene escuchar una grabación y
+  comprobarlo. Cuesta el doble, porque se transcriben dos audios.
+- **Mono, o estéreo con el mismo audio en los dos canales**: el modelo separa
+  las voces como *Hablante A* y *Hablante B*. El auditor elige cuál es el agente
+  con un clic.
+
+**Proveedores.** Cada proveedor es una estrategia en
+`panel/transcripcion/estrategias/` (patrón Strategy). Para OpenAI, el modelo por
+defecto es `gpt-4o-transcribe-diarize`, el único que hoy separa hablantes;
+OpenAI anunció su apagado para el 26/02/2027, así que antes de esa fecha hay que
+cambiar `OPENAI_MODELO_TRANSCRIPCION` (y `OPENAI_FORMATO_RESPUESTA` si el modelo
+nuevo no es uno que el código conozca). Para sumar otro proveedor: una clase con
+`@registrar`, sus variables de entorno, y su caso en las pruebas de contrato de
+`tests/test_transcripcion_estrategias.py`.
+
+**Varias versiones.** *Transcribir de nuevo* (con el mismo u otro proveedor)
+guarda otra versión; la primera queda como principal (★) y se puede cambiar.
+
+**Retención.** Una vez por día, la sincronización borra las transcripciones de
+llamadas con más de `TRANSCRIPCION_RETENCION_DIAS` días.
 
 ## Nota sobre la fecha de cierre
 

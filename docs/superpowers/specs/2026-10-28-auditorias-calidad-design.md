@@ -575,7 +575,11 @@ solo sumarían quién las hizo.
 | `TRANSCRIPCION_PROVEEDOR` | Estrategia por defecto: `openai`, `alibaba`, `falsa`… |
 | `TRANSCRIPCION_RESPALDO` | Estrategias a probar si falla la principal, separadas por coma |
 | `TRANSCRIPCION_IDIOMA` | `es` |
-| `OPENAI_API_KEY`, `OPENAI_MODELO_TRANSCRIPCION` | Credencial y modelo de OpenAI |
+| `OPENAI_API_KEY`, `OPENAI_MODELO_TRANSCRIPCION` | Credencial y modelo de OpenAI (por defecto `gpt-4o-transcribe-diarize`) |
+| `OPENAI_FORMATO_RESPUESTA` | `diarized_json`, `verbose_json` o `json`, para un modelo que el código no conoce |
+| `OPENAI_BASE_URL` | Por defecto `https://api.openai.com/v1` |
+| `TRANSCRIPCION_VOCABULARIO` | Palabras propias separadas por coma (marcas, productos) |
+| `TRANSCRIPCION_POR_CICLO` | Pedidos de la cola por ciclo de `sync`; por defecto `20` |
 | `OPENAI_PRECIO_MINUTO` | Precio por minuto para el costo estimado. Sin valor, el panel no muestra costo en vez de inventarlo |
 | `CLOUDTALK_CANAL_AGENTE` | `izquierdo` o `derecho`, para grabaciones estéreo; se fija tras escuchar una grabación |
 | `ALIBABA_API_KEY`, `ALIBABA_REGION`, `ALIBABA_MODELO_TRANSCRIPCION` | Credencial, región y modelo de Alibaba Model Studio |
@@ -633,7 +637,7 @@ Criterios comunes a todas las páginas:
 | 3 ✅ | Sincronización | Proceso `sync` para CloudTalk y Chatwoot, teléfonos, asignación automática | Inicio, Sin asignar, Llamadas (sin audio), Exportar datos | Las llamadas y chats aparecen solos y asignados |
 | 4 ✅ | Historial del cliente | Consulta por teléfono | Página Historial del cliente | Traza completa por número |
 | 5 ✅ | Audio | Grabación de CloudTalk, MP3, SFTP, reintentos y retención de 3 meses | Reproductor en Llamadas e Historial | Se escuchan las llamadas |
-| 6 | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa`, `openai` y `alibaba`, cola en `sync`, retención de 3 años | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
+| 6 ✅ | Transcripción | Interfaz Strategy, registro, contexto, estrategias `falsa` y `openai` (Alibaba queda para después), cola en `sync`, retención de 3 años | Botón Transcribir, lote con costo, página Transcripción | Las llamadas tienen texto |
 | 7 | Auditorías | Fichas, auditorías y cálculo de nota | Fichas, Auditar y Auditorías | Se audita |
 | 8 | Reportes | Reportes y Excel | Reportes | Se descarga el reporte de auditorías |
 
@@ -687,6 +691,30 @@ Decisiones de la etapa 5:
   obtiene una vez con `python -m panel.audio.huella HOST PUERTO`.
 - La excepción de «no borrar el audio de una auditoría en borrador» llega con
   las auditorías, en la etapa 7.
+
+Decisiones de la etapa 6:
+
+- Proveedor inicial: OpenAI con `gpt-4o-transcribe-diarize`, porque es el único
+  modelo que hoy separa hablantes y da marcas de tiempo, y sirve tanto para
+  grabaciones mono como estéreo. Está anunciado para apagarse el 2027-02-26:
+  antes de esa fecha se cambia `OPENAI_MODELO_TRANSCRIPCION` (y, si el modelo
+  nuevo no es conocido, `OPENAI_FORMATO_RESPUESTA`), sin tocar código.
+- La estrategia de OpenAI usa `requests` directamente y no el SDK, como el
+  resto de los clientes del proyecto; así se prueba con `responses`.
+- Una sola llamada se transcribe en el momento desde el detalle; los lotes van
+  a la cola (`trabajos_transcripcion`) y los procesa `sync`.
+- En mono, el proveedor separa las voces («A», «B») sin saber cuál es el
+  agente: el auditor lo elige con un clic. No se intenta adivinarlo.
+- Si la estrategia no da marcas de tiempo, un estéreo se transcribe mezclado en
+  vez de por canal.
+- Un audio que supera lo que acepta el proveedor se parte en tramos. Con
+  diarización, las etiquetas «A»/«B» de un tramo no tienen por qué coincidir con
+  las del siguiente; con 25 MB por tramo (unos 100 minutos en mono) es un caso
+  raro.
+- El costo estimado de un lote se calcula con la duración de las llamadas; una
+  grabación estéreo se transcribe por canal y cuesta el doble.
+- La página donde se ve la fila elegida la recuerda por su id: Streamlit la
+  olvida cuando cambian los datos de la tabla (al transcribir o asignar).
 La etapa 1 creó `personas`; las demás tablas de la sección 5.2 llegan con su
 etapa.
 

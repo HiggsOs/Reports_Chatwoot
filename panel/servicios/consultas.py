@@ -56,6 +56,7 @@ class FilaLlamada(FilaInteraccion):
     grabada: bool
     enlace_plataforma: str | None
     audio_estado: str | None
+    transcripcion_estado: str | None
 
 
 class FilaConversacion(FilaInteraccion):
@@ -123,6 +124,7 @@ def listar_llamadas(
                 grabada=llamada.grabada,
                 enlace_plataforma=llamada.enlace_plataforma,
                 audio_estado=llamada.audio_estado,
+                transcripcion_estado=llamada.transcripcion_estado,
             )
         )
     return filas
