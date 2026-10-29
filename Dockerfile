@@ -7,10 +7,17 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# ffmpeg convierte las grabaciones de CloudTalk a MP3.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py chatwoot.py reporte.py ringover.py reporte_ringover.py cloudtalk.py reporte_cloudtalk.py app.py generar_hash.py ./
+COPY config.py chatwoot.py reporte.py ringover.py reporte_ringover.py cloudtalk.py reporte_cloudtalk.py app.py generar_hash.py alembic.ini ./
+COPY panel ./panel
+COPY ui ./ui
 
 RUN mkdir -p /data
 VOLUME ["/data"]
@@ -20,8 +27,6 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
 
-CMD ["streamlit", "run", "app.py", \
-     "--server.address=0.0.0.0", \
-     "--server.port=8501", \
-     "--server.headless=true", \
-     "--browser.gatherUsageStats=false"]
+# Las migraciones se aplican en cada arranque: si no hay cambios pendientes no
+# hacen nada, y si fallan el contenedor no arranca con un esquema viejo.
+CMD ["sh", "-c", "alembic upgrade head && exec streamlit run app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true --browser.gatherUsageStats=false"]

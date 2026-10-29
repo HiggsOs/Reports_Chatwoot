@@ -154,6 +154,14 @@ class ClienteChatwoot:
             if inbox.get("id") is not None
         }
 
+    def listar_agentes(self) -> list[dict]:
+        """Usuarios (agentes) de la cuenta de Chatwoot."""
+        datos = self._pedir("GET", "/agents")
+        # El endpoint devuelve una lista; se acepta también el envoltorio
+        # `payload` que usan otros endpoints, por si cambia.
+        agentes = datos.get("payload") if isinstance(datos, dict) else datos
+        return [agente for agente in (agentes or []) if isinstance(agente, dict)]
+
     def listar_mensajes(self, conversacion_id: int) -> list[dict]:
         """Devuelve todos los mensajes, del más antiguo al más reciente."""
         ruta = f"/conversations/{conversacion_id}/messages"

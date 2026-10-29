@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from config import Config, ConfigError, cargar_config, ruta_asesores, ruta_cache
+from config import (
+    Config,
+    ConfigError,
+    cargar_config,
+    normalizar_url_bd,
+    ruta_asesores,
+    ruta_cache,
+)
 
 ENTORNO_VALIDO = {
     "CHATWOOT_BASE_URL": "https://chat.ejemplo.com/",
@@ -11,6 +18,7 @@ ENTORNO_VALIDO = {
     "APP_USERNAME": "reportes",
     "APP_PASSWORD_HASH": "$2b$12$abcdefghijklmnopqrstuv",
     "APP_COOKIE_KEY": "clave-de-cookie",
+    "DATABASE_URL": "postgres://panel:clave@postgres:5432/panel",
     "DATA_DIR": "/data",
 }
 
@@ -104,3 +112,65 @@ def test_cloudtalk_necesita_id_y_secreto():
     )
     assert completo.cloudtalk_configurado
     assert completo.cloudtalk_key_id == "abc"
+
+
+def test_database_url_es_obligatoria():
+    entorno = {k: v for k, v in ENTORNO_VALIDO.items() if k != "DATABASE_URL"}
+    with pytest.raises(ConfigError) as error:
+        cargar_config(entorno)
+    assert "DATABASE_URL" in str(error.value)
+
+
+def test_database_url_agrega_el_driver():
+    cfg = cargar_config(ENTORNO_VALIDO)
+    assert cfg.database_url == "postgresql+psycopg://panel:clave@postgres:5432/panel"
+
+
+@pytest.mark.parametrize(
+    "bruta",
+    [
+        "postgres://u:c@h:5432/b",
+        "postgresql://u:c@h:5432/b",
+        "  postgresql+psycopg://u:c@h:5432/b  ",
+    ],
+)
+def test_normalizar_url_bd_acepta_las_formas_de_postgres(bruta):
+    assert normalizar_url_bd(bruta) == "postgresql+psycopg://u:c@h:5432/b"
+
+
+def test_normalizar_url_bd_respeta_otro_driver_de_postgres():
+    assert normalizar_url_bd("postgresql+asyncpg://u@h/b") == "postgresql+asyncpg://u@h/b"
+
+
+@pytest.mark.parametrize("bruta", ["mysql://u@h/b", "sqlite:///panel.db", "host:5432"])
+def test_normalizar_url_bd_rechaza_lo_que_no_es_postgres(bruta):
+    with pytest.raises(ConfigError) as error:
+        normalizar_url_bd(bruta)
+    assert "DATABASE_URL" in str(error.value)
+
+
+def test_config_es_inmutable():
+    cfg = cargar_config(ENTORNO_VALIDO)
+    with pytest.raises(ValueError):
+        cfg.account_id = 9
+
+
+def test_la_sincronizacion_trae_valores_por_defecto():
+    cfg = cargar_config(ENTORNO_VALIDO)
+    assert (cfg.sync_intervalo_minutos, cfg.sync_dias_iniciales, cfg.chatwoot_dias_relectura) == (
+        15,
+        30,
+        14,
+    )
+
+
+def test_la_sincronizacion_toma_sus_valores_del_entorno():
+    cfg = cargar_config({**ENTORNO_VALIDO, "SYNC_INTERVALO_MINUTOS": " 5 ", "SYNC_DIAS_INICIALES": "90"})
+    assert (cfg.sync_intervalo_minutos, cfg.sync_dias_iniciales) == (5, 90)
+
+
+@pytest.mark.parametrize("valor", ["0", "-3", "diez", "1.5"])
+def test_la_sincronizacion_rechaza_valores_no_positivos(valor):
+    with pytest.raises(ConfigError) as error:
+        cargar_config({**ENTORNO_VALIDO, "SYNC_INTERVALO_MINUTOS": valor})
+    assert "SYNC_INTERVALO_MINUTOS" in str(error.value)
