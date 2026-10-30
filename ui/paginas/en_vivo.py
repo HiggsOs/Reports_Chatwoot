@@ -34,6 +34,9 @@ def catalogo_cloudtalk(key_id: str, key_secret: str, base_url: str) -> dict:
 
 def reporte_chatwoot(cfg: Config, leer_areas: Callable[[], dict[str, str]]) -> None:
     st.title("Reporte de Chatwoot")
+    if not cfg.chatwoot_configurado:
+        st.warning("Chatwoot no está conectado. Cargue la URL, la cuenta y el token en General.")
+        return
     st.caption(
         "Conversaciones de Chatwoot consultadas en el momento. La página "
         "Conversaciones muestra lo mismo desde la base, con el asesor real."

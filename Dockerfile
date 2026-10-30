@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config.py chatwoot.py reporte.py ringover.py reporte_ringover.py cloudtalk.py reporte_cloudtalk.py app.py generar_hash.py alembic.ini ./
 COPY panel ./panel
 COPY ui ./ui
+COPY .streamlit ./.streamlit
 
 RUN mkdir -p /data
 VOLUME ["/data"]
