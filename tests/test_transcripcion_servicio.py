@@ -180,7 +180,9 @@ def test_la_cola_no_repite_pedidos_y_los_procesa(fabrica, almacen):
 
     assert transcripcion.procesar_cola(limite=1).hechos == 1
     assert transcripcion.procesar_cola(limite=5).hechos == 1
-    assert transcripcion.procesar_cola(limite=5).model_dump() == {"hechos": 0, "reintentos": 0, "errores": 0}
+    assert transcripcion.procesar_cola(limite=5).model_dump() == {
+        "hechos": 0, "reintentos": 0, "errores": 0, "pausada_por_tope": False
+    }
     # Ya hecho: se puede volver a pedir.
     assert transcripcion.encolar([una]) == 1
 

@@ -1,7 +1,7 @@
 """Lecturas para las pantallas: listados filtrados, conteos y exportación."""
 
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, aliased
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
 from panel.db.modelos import (
     ASIGNACION_MANUAL,
+    AUDIO_GUARDADO,
     Cliente,
     Conversacion,
     Cuenta,
@@ -211,3 +212,14 @@ def a_csv(filas: list[BaseModel], columnas: dict[str, str]) -> bytes:
     memoria = io.StringIO()
     datos.to_csv(memoria, index=False, lineterminator="\r\n")
     return ("﻿" + memoria.getvalue()).encode("utf-8")
+
+
+def audios_por_vencer(sesion: Session, ahora: datetime, retencion_dias: int, aviso_dias: int = 7) -> int:
+    """Audios guardados que se borran en los próximos `aviso_dias` días."""
+    desde = ahora - timedelta(days=retencion_dias)
+    hasta = desde + timedelta(days=aviso_dias)
+    return sesion.scalar(
+        select(func.count())
+        .select_from(Llamada)
+        .where(Llamada.audio_estado == AUDIO_GUARDADO, Llamada.inicio >= desde, Llamada.inicio < hasta)
+    )
