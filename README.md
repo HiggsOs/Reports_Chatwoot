@@ -70,9 +70,17 @@ a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 
 ## Variables de entorno
 
+Solo son obligatorias `APP_USERNAME`, `APP_PASSWORD_HASH`, `APP_COOKIE_KEY` y
+`DATABASE_URL`. Todo lo demás (Chatwoot, CloudTalk, SFTP, transcripción) se
+puede cargar desde el panel, en **General** y en **Transcripción › Configuración**:
+se guarda en la base con el mismo nombre de la variable y la pisa. Las claves
+se guardan cifradas con `PANEL_CLAVE_CIFRADO` (o, si no está, con
+`APP_COOKIE_KEY`); si esa llave cambia, hay que volver a cargar las claves.
+
 | Variable | Descripción |
 |---|---|
-| `CHATWOOT_BASE_URL` | Ej. `https://chat.miempresa.com` |
+| `PANEL_CLAVE_CIFRADO` | Llave para cifrar las claves guardadas desde el panel. Opcional; por defecto se usa `APP_COOKIE_KEY` |
+| `CHATWOOT_BASE_URL` | Ej. `https://chat.miempresa.com`. Opcional: también se carga en General |
 | `CHATWOOT_ACCOUNT_ID` | Id numérico de la cuenta |
 | `CHATWOOT_API_TOKEN` | Token de acceso de un usuario administrador |
 | `APP_USERNAME` | Usuario del login |
@@ -102,6 +110,11 @@ a Inicio: el login corre antes que la navegación. Desde ahí se usa el menú.
 | `OPENAI_MODELO_TRANSCRIPCION` | Por defecto `gpt-4o-transcribe-diarize` |
 | `OPENAI_FORMATO_RESPUESTA` | Solo para un modelo que el código no conoce: `diarized_json`, `verbose_json` o `json` |
 | `OPENAI_PRECIO_MINUTO` | Precio por minuto de audio en USD, para el costo estimado. Sin valor, el panel no muestra costos |
+| `TRANSCRIPCION_MODELOS` | Modelos que se pueden elegir con su precio, en JSON. Normalmente se carga en Transcripción › Configuración |
+| `TRANSCRIPCION_TOPE_MENSUAL_USD` | Al llegar, la cola de transcripción se pausa hasta el mes siguiente. Vacío: sin tope |
+| `TRANSCRIPCION_AVISO_PORCENTAJE` | Porcentaje del tope en que Inicio avisa. Por defecto `80` |
+| `TRANSCRIPCION_CONFIRMAR_LOTE_USD` | Un lote que cueste más pide confirmación. Vacío: nunca |
+| `TRANSCRIPCION_AUTO_MIN_SEGUNDOS` | Encola sola cada llamada grabada nueva de al menos estos segundos. `0`: no |
 | `DATA_DIR` | Ruta de los datos persistentes (por defecto `/data`) |
 | `TZ` | `America/Bogota` |
 
@@ -217,7 +230,7 @@ horario de verano; inicio incluido y fin excluido.
 
 Para agregar una estrategia nueva: una clase en
 `panel/asignacion/estrategias/` registrada con `@registrar`, su formulario en
-`ui/formularios_asignacion.py` y su ejemplo en
+`ui/componentes/formularios_asignacion.py` y su ejemplo en
 `tests/test_asignacion_estrategias.py`, donde las pruebas de contrato la
 validan junto con las demás.
 

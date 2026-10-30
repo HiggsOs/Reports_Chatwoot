@@ -206,3 +206,19 @@ def test_registro():
         registro.crear("no_existe", {})
     with pytest.raises(ValueError):
         registro.registrar(EstrategiaFalsa)
+
+
+@responses.activate
+def test_openai_probar_la_clave():
+    from panel.transcripcion import registro
+
+    responses.get(
+        "https://api.openai.com/v1/models",
+        json={"data": [{"id": "whisper-1"}, {"id": "gpt-4o"}]},
+    )
+    mensaje = registro.probar_clave("openai", {"OPENAI_API_KEY": "sk-x"})
+    assert "whisper-1" in mensaje and "gpt-4o," not in mensaje
+
+    responses.replace(responses.GET, "https://api.openai.com/v1/models", status=401)
+    with pytest.raises(TranscripcionError):
+        registro.probar_clave("openai", {"OPENAI_API_KEY": "sk-x"})

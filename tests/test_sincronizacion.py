@@ -190,3 +190,29 @@ def test_pide_los_mensajes_que_faltan_aunque_la_conversacion_no_cambie(fabrica):
     fuente = FuenteConversacionesFalsa([conversacion("1", ultima)])
     SincronizadorConversaciones(fabrica, fuente, INICIAL, 14, ahora=lambda: AHORA).ejecutar()
     assert fuente.mensajes_pedidos == ["1"]
+
+
+def test_cada_ciclo_lee_los_ajustes_del_panel(fabrica):
+    from config import cargar_config
+    from panel.ajustes import Cifrador, RepositorioAjustes
+    from panel.sync.__main__ import config_del_ciclo
+    from tests.test_config import ENTORNO_VALIDO
+
+    base = cargar_config(ENTORNO_VALIDO)
+    with fabrica() as sesion:
+        RepositorioAjustes(sesion, Cifrador.desde_entorno(ENTORNO_VALIDO)).guardar(
+            {"SYNC_INTERVALO_MINUTOS": "5", "CHATWOOT_API_TOKEN": "del-panel"}
+        )
+        sesion.commit()
+
+    cfg = config_del_ciclo(base, fabrica, ENTORNO_VALIDO)
+    assert cfg.sync_intervalo_minutos == 5
+    assert cfg.api_token == "del-panel"
+
+    with fabrica() as sesion:
+        RepositorioAjustes(sesion, Cifrador.desde_entorno(ENTORNO_VALIDO)).guardar(
+            {"SYNC_INTERVALO_MINUTOS": "cero"}
+        )
+        sesion.commit()
+    # Un ajuste inválido no frena la sincronización: sigue con el entorno.
+    assert config_del_ciclo(base, fabrica, ENTORNO_VALIDO) is base

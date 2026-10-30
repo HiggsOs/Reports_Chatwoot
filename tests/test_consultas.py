@@ -142,3 +142,22 @@ def test_sync_rechaza_una_fecha_invalida():
 def test_sync_sin_configuracion_termina_con_error(monkeypatch):
     monkeypatch.setattr("os.environ", {})
     assert main(["--una-vez"]) == 2
+
+
+def test_audios_por_vencer(fabrica):
+    from datetime import datetime, timedelta, timezone
+
+    from panel.db.base import unidad_de_trabajo
+    from panel.db.modelos import Llamada
+    from panel.servicios.consultas import audios_por_vencer
+    from tests.test_audio_servicio import guardar_llamada
+
+    ahora = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+    pronto = guardar_llamada(fabrica, "pronto", dias_atras=1)
+    lejos = guardar_llamada(fabrica, "lejos", dias_atras=1)
+    with unidad_de_trabajo(fabrica) as sesion:
+        for llamada_id, dias in ((pronto, 87), (lejos, 30)):
+            fila = sesion.get(Llamada, llamada_id)
+            fila.audio_estado, fila.inicio = "guardado", ahora - timedelta(days=dias)
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert audios_por_vencer(sesion, ahora, 90) == 1

@@ -1,9 +1,11 @@
 """Lectura y validación de la configuración por variables de entorno."""
 
+import json
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 DATA_DIR_POR_DEFECTO = "/data"
 RINGOVER_BASE_URL_POR_DEFECTO = "https://public-api.ringover.com/v2"
@@ -27,10 +29,11 @@ SYNC_INTERVALO_MINUTOS_POR_DEFECTO = 15
 SYNC_DIAS_INICIALES_POR_DEFECTO = 30
 CHATWOOT_DIAS_RELECTURA_POR_DEFECTO = 14
 
+TRANSCRIPCION_AVISO_PORCENTAJE_POR_DEFECTO = 80
+
+# Chatwoot ya no es obligatorio en el entorno: se puede cargar desde la pantalla
+# General. Lo que sigue siendo obligatorio hace falta antes de leer la base.
 _REQUERIDAS = (
-    "CHATWOOT_BASE_URL",
-    "CHATWOOT_ACCOUNT_ID",
-    "CHATWOOT_API_TOKEN",
     "APP_USERNAME",
     "APP_PASSWORD_HASH",
     "APP_COOKIE_KEY",
@@ -42,17 +45,39 @@ class ConfigError(Exception):
     """La configuración del entorno es inválida o está incompleta."""
 
 
+class ModeloTranscripcion(BaseModel):
+    """Un modelo que se puede elegir para transcribir, con su precio.
+
+    Se carga en la pantalla Transcripción (TRANSCRIPCION_MODELOS, en JSON).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    proveedor: str  # nombre de la estrategia: «openai»
+    modelo: str
+    precio_minuto: Decimal | None = None  # USD; vacío, el panel no estima costos
+    # Cómo cobra el proveedor: por segundo, o redondeando cada audio al minuto.
+    redondeo: Literal["segundo", "minuto"] = "segundo"
+    activo: bool = True
+
+    @property
+    def clave(self) -> str:
+        """Cómo se nombra en la cadena de proveedores y en la cola."""
+        return f"{self.proveedor}:{self.modelo}"
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    base_url: str
-    account_id: int
-    api_token: str
     usuario: str
     password_hash: str
     cookie_key: str
     database_url: str
     data_dir: Path
+    # Chatwoot: opcional; sin él no se sincronizan conversaciones.
+    base_url: str = ""
+    account_id: int = 0
+    api_token: str = ""
     # Ringover es opcional: sin token, la app funciona igual y solo se oculta
     # la pestaña de transcripciones.
     ringover_token: str = ""
@@ -89,6 +114,16 @@ class Config(BaseModel):
     cloudtalk_canal_agente: str = "izquierdo"
     transcripcion_retencion_dias: int = TRANSCRIPCION_RETENCION_DIAS_POR_DEFECTO
     transcripcion_por_ciclo: int = TRANSCRIPCION_POR_CICLO_POR_DEFECTO
+    # Modelos con precio (pantalla Transcripción). Vacío: se usa solo el modelo
+    # de OPENAI_MODELO_TRANSCRIPCION con OPENAI_PRECIO_MINUTO, como antes.
+    transcripcion_modelos: tuple[ModeloTranscripcion, ...] = ()
+    # Límites de gasto. El tope pausa la cola al llegar, por mes (hora de España).
+    transcripcion_tope_mensual_usd: Decimal | None = None
+    transcripcion_aviso_porcentaje: int = TRANSCRIPCION_AVISO_PORCENTAJE_POR_DEFECTO
+    # Un lote que cueste más pide confirmación antes de encolarse.
+    transcripcion_confirmar_lote_usd: Decimal | None = None
+    # Encola sola cada llamada grabada nueva de al menos estos segundos. 0: no.
+    transcripcion_auto_min_segundos: int = 0
     # Las variables de entorno tal cual, para que cada estrategia lea las suyas
     # (OPENAI_API_KEY…) sin que esta clase tenga que conocerlas. No se muestran.
     entorno: dict[str, str] = Field(default_factory=dict, repr=False)
@@ -96,6 +131,10 @@ class Config(BaseModel):
     @property
     def cloudtalk_configurado(self) -> bool:
         return bool(self.cloudtalk_key_id and self.cloudtalk_key_secret)
+
+    @property
+    def chatwoot_configurado(self) -> bool:
+        return bool(self.base_url and self.account_id and self.api_token)
 
 
 def normalizar_url_bd(bruta: str) -> str:
@@ -163,6 +202,44 @@ def _almacen(entorno: Mapping[str, str]) -> dict:
     return datos
 
 
+def _entero_no_negativo(entorno: Mapping[str, str], nombre: str, defecto: int) -> int:
+    bruto = (entorno.get(nombre) or "").strip()
+    if not bruto:
+        return defecto
+    if not bruto.isdigit():
+        raise ConfigError(f"{nombre} debe ser un número entero, cero o mayor, se recibió: {bruto!r}")
+    return int(bruto)
+
+
+def _importe(entorno: Mapping[str, str], nombre: str) -> Decimal | None:
+    """Un importe en USD; acepta coma decimal. Vacío o cero: sin límite."""
+    bruto = (entorno.get(nombre) or "").strip().replace(",", ".")
+    if not bruto:
+        return None
+    try:
+        valor = Decimal(bruto)
+    except InvalidOperation as error:
+        raise ConfigError(f"{nombre} debe ser un importe, se recibió: {bruto!r}") from error
+    if valor < 0:
+        raise ConfigError(f"{nombre} no puede ser negativo.")
+    return valor or None
+
+
+def _modelos(entorno: Mapping[str, str]) -> tuple[ModeloTranscripcion, ...]:
+    bruto = (entorno.get("TRANSCRIPCION_MODELOS") or "").strip()
+    if not bruto:
+        return ()
+    try:
+        datos = json.loads(bruto)
+        modelos = tuple(ModeloTranscripcion.model_validate(d) for d in datos)
+    except (ValueError, TypeError, ValidationError) as error:
+        raise ConfigError(f"TRANSCRIPCION_MODELOS no es una lista de modelos válida: {error}") from error
+    claves = [m.clave for m in modelos]
+    if len(claves) != len(set(claves)):
+        raise ConfigError("TRANSCRIPCION_MODELOS tiene un modelo repetido.")
+    return modelos
+
+
 def _lista(entorno: Mapping[str, str], nombre: str) -> tuple[str, ...]:
     return tuple(p.strip() for p in (entorno.get(nombre) or "").split(",") if p.strip())
 
@@ -188,6 +265,15 @@ def _transcripcion(entorno: Mapping[str, str]) -> dict:
         "transcripcion_por_ciclo": _entero_positivo(
             entorno, "TRANSCRIPCION_POR_CICLO", TRANSCRIPCION_POR_CICLO_POR_DEFECTO
         ),
+        "transcripcion_modelos": _modelos(entorno),
+        "transcripcion_tope_mensual_usd": _importe(entorno, "TRANSCRIPCION_TOPE_MENSUAL_USD"),
+        "transcripcion_aviso_porcentaje": _entero_positivo(
+            entorno, "TRANSCRIPCION_AVISO_PORCENTAJE", TRANSCRIPCION_AVISO_PORCENTAJE_POR_DEFECTO
+        ),
+        "transcripcion_confirmar_lote_usd": _importe(entorno, "TRANSCRIPCION_CONFIRMAR_LOTE_USD"),
+        "transcripcion_auto_min_segundos": _entero_no_negativo(
+            entorno, "TRANSCRIPCION_AUTO_MIN_SEGUNDOS", 0
+        ),
         "entorno": dict(entorno),
     }
 
@@ -201,9 +287,9 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
             "Faltan variables de entorno obligatorias: " + ", ".join(faltantes)
         )
 
-    bruto = entorno["CHATWOOT_ACCOUNT_ID"].strip()
+    bruto = (entorno.get("CHATWOOT_ACCOUNT_ID") or "").strip()
     try:
-        account_id = int(bruto)
+        account_id = int(bruto) if bruto else 0
     except ValueError as error:
         raise ConfigError(
             f"CHATWOOT_ACCOUNT_ID debe ser un número entero, se recibió: {bruto!r}"
@@ -212,9 +298,9 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
     data_dir = (entorno.get("DATA_DIR") or DATA_DIR_POR_DEFECTO).strip()
 
     return Config(
-        base_url=entorno["CHATWOOT_BASE_URL"].strip().rstrip("/"),
+        base_url=(entorno.get("CHATWOOT_BASE_URL") or "").strip().rstrip("/"),
         account_id=account_id,
-        api_token=entorno["CHATWOOT_API_TOKEN"].strip(),
+        api_token=(entorno.get("CHATWOOT_API_TOKEN") or "").strip(),
         usuario=entorno["APP_USERNAME"].strip(),
         password_hash=entorno["APP_PASSWORD_HASH"].strip(),
         cookie_key=entorno["APP_COOKIE_KEY"].strip(),
