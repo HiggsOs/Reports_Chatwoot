@@ -247,8 +247,12 @@ class Llamada(Asignable, MarcasDeTiempo, Base):
 class Conversacion(Asignable, MarcasDeTiempo, Base):
     """Una conversación de Chatwoot. La cuenta es el usuario asignado. Sin
     usuario asignado, es la del asesor que más mensajes envió en ella
-    (`cuenta_por_mensajes`); si ningún asesor escribió, queda sin cuenta y sin
-    asignar."""
+    (`cuenta_por_mensajes`).
+
+    Una conversación abandonada (sin usuario, sin respuestas de asesores y con
+    un solo mensaje del cliente) poco después de otra del mismo cliente es la
+    finalización de esa (`continua_de_id`): toma su asesor y no cuenta como
+    conversación nueva. Si no, queda sin cuenta y sin asignar."""
 
     __tablename__ = "conversaciones"
 
@@ -258,6 +262,10 @@ class Conversacion(Asignable, MarcasDeTiempo, Base):
     # Chatwoot no tiene usuario asignado: la cuenta es la del asesor que más
     # mensajes envió.
     cuenta_por_mensajes: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # La conversación que esta finaliza. Vacío: es una conversación propia.
+    continua_de_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversaciones.id", ondelete="SET NULL")
+    )
     inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ultima_actividad: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     canal: Mapped[str] = mapped_column(String(200))  # nombre de la bandeja
@@ -281,6 +289,7 @@ class Conversacion(Asignable, MarcasDeTiempo, Base):
         Index("ix_conversaciones_cuenta_id_inicio", "cuenta_id", "inicio"),
         Index("ix_conversaciones_persona_id", "persona_id"),
         Index("ix_conversaciones_cliente_id", "cliente_id"),
+        Index("ix_conversaciones_continua_de_id", "continua_de_id"),
     )
 
 

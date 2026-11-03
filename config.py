@@ -28,6 +28,7 @@ CANALES_AGENTE = ("izquierdo", "derecho")
 SYNC_INTERVALO_MINUTOS_POR_DEFECTO = 15
 SYNC_DIAS_INICIALES_POR_DEFECTO = 30
 CHATWOOT_DIAS_RELECTURA_POR_DEFECTO = 14
+CHATWOOT_DIAS_FINALIZACION_POR_DEFECTO = 7
 
 TRANSCRIPCION_AVISO_PORCENTAJE_POR_DEFECTO = 80
 
@@ -94,6 +95,10 @@ class Config(BaseModel):
     # Las conversaciones cambian después de creadas (se resuelven, se
     # reasignan), así que cada ciclo relee las de estos últimos días.
     chatwoot_dias_relectura: int = CHATWOOT_DIAS_RELECTURA_POR_DEFECTO
+    # Una conversación abandonada (sin asesor y con un solo mensaje del
+    # cliente) que llega hasta estos días después de la anterior del mismo
+    # cliente es su finalización, no una conversación nueva.
+    chatwoot_dias_finalizacion: int = CHATWOOT_DIAS_FINALIZACION_POR_DEFECTO
     # Almacén de los MP3 escuchados: vacío (no se guardan), «local» (una
     # carpeta en DATA_DIR, para desarrollo) o «sftp» (el hosting).
     almacen_tipo: str = ""
@@ -326,6 +331,9 @@ def cargar_config(entorno: Mapping[str, str]) -> Config:
         ),
         chatwoot_dias_relectura=_entero_positivo(
             entorno, "CHATWOOT_DIAS_RELECTURA", CHATWOOT_DIAS_RELECTURA_POR_DEFECTO
+        ),
+        chatwoot_dias_finalizacion=_entero_positivo(
+            entorno, "CHATWOOT_DIAS_FINALIZACION", CHATWOOT_DIAS_FINALIZACION_POR_DEFECTO
         ),
         **_almacen(entorno),
         **_transcripcion(entorno),

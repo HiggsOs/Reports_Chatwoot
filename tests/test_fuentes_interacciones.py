@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from panel.fuentes.interacciones import (
     asesor_con_mas_mensajes,
+    es_abandonada,
     FuenteChatwoot,
     FuenteCloudTalk,
     conversacion_de_chatwoot,
@@ -162,3 +163,13 @@ def test_asesor_con_mas_mensajes_desempata_por_el_ultimo_que_escribio():
 def test_asesor_con_mas_mensajes_sin_asesores():
     assert asesor_con_mas_mensajes([]) is None
     assert asesor_con_mas_mensajes([{"message_type": 0, "sender_type": "Contact"}]) is None
+
+
+def test_es_abandonada():
+    cliente = {"message_type": 0, "created_at": 1}
+    assert es_abandonada([cliente])
+    assert es_abandonada([cliente, {"message_type": 2, "content": "resolved"}])
+    assert es_abandonada([cliente, _saliente(7, 2, private=True)])  # nota interna
+    assert not es_abandonada([cliente, cliente])
+    assert not es_abandonada([cliente, _saliente(7, 2)])
+    assert not es_abandonada([])

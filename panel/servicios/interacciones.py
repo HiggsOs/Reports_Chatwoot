@@ -1,10 +1,10 @@
 """Guardado y asignación de llamadas y conversaciones."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from panel.asignacion.servicio import (
@@ -24,6 +24,7 @@ from panel.fuentes.interacciones import (
     ConversacionExterna,
     LlamadaExterna,
     asesor_con_mas_mensajes,
+    es_abandonada,
 )
 from panel.servicios.cuentas import ServicioCuentas
 from panel.telefonos import normalizar
@@ -34,7 +35,12 @@ MOTIVO_SIN_USUARIO_NI_MENSAJES = (
     "La conversación no tiene usuario asignado en Chatwoot ni mensajes de asesores"
 )
 MOTIVO_POR_MENSAJES = "Sin usuario en Chatwoot: el asesor que más mensajes envió"
+MOTIVO_FINALIZACION = (
+    "Finalización de la conversación {anterior}: sin respuesta y con un solo "
+    "mensaje del cliente, toma su asesor"
+)
 MOTIVO_MANUAL = "Asignada a mano"
+PLAZO_FINALIZACION_POR_DEFECTO = timedelta(days=7)
 SIN_ASIGNAR = "Sin asignar"
 
 Tipo = Literal["llamada", "conversacion"]
@@ -55,8 +61,14 @@ class ResumenReasignacion(BaseModel):
 
 
 class ServicioInteracciones:
-    def __init__(self, sesion: Session, zona=ZONA_OPERACION_POR_DEFECTO) -> None:
+    def __init__(
+        self,
+        sesion: Session,
+        zona=ZONA_OPERACION_POR_DEFECTO,
+        plazo_finalizacion: timedelta = PLAZO_FINALIZACION_POR_DEFECTO,
+    ) -> None:
         self._sesion = sesion
+        self._plazo_finalizacion = plazo_finalizacion
         self.asignacion = ServicioAsignacion(sesion, zona)
         self._cuentas = ServicioCuentas(sesion, self.asignacion)
         self._personas = RepositorioPersonas(sesion)
@@ -111,7 +123,11 @@ class ServicioInteracciones:
         self, conversaciones: list[tuple[ConversacionExterna, list[dict] | None]]
     ) -> ResumenGuardado:
         """`mensajes` en None: la conversación no cambió y conserva su dirección
-        y su cierre."""
+        y su cierre.
+
+        Se guardan de la más vieja a la más nueva, para que una abandonada
+        encuentre a la conversación anterior aunque llegue en el mismo lote."""
+        conversaciones = sorted(conversaciones, key=lambda par: par[0].inicio)
         resumen = ResumenGuardado()
         existentes = self._existentes(
             Conversacion, [externa.id_externo for externa, _ in conversaciones]
@@ -132,7 +148,6 @@ class ServicioInteracciones:
                 cierre, aproximado = detectar_cierre(externa.datos_origen, mensajes)
                 conversacion.cierre = cierre
                 conversacion.cierre_aproximado = aproximado
-            self._asignar_cuenta(conversacion, externa)
             conversacion.inicio = externa.inicio
             conversacion.ultima_actividad = externa.ultima_actividad
             conversacion.canal = externa.canal
@@ -142,6 +157,7 @@ class ServicioInteracciones:
             conversacion.cliente_id = self._cliente(
                 externa.telefono_cliente, externa.nombre_cliente
             )
+            self._asignar_cuenta(conversacion, externa)
             self._asignar_automatica(conversacion)
             if nueva:
                 self._sesion.add(conversacion)
@@ -149,23 +165,69 @@ class ServicioInteracciones:
             resumen.actualizadas += not nueva
             resumen.sin_asignar += conversacion.persona_id is None
         self._sesion.flush()
+        # Una conversación que cambió de asesor se lo pasa a sus finalizaciones.
+        self._actualizar_finalizaciones([c.id for c in existentes.values()])
         return resumen
 
     def _asignar_cuenta(self, conversacion: Conversacion, externa: ConversacionExterna) -> None:
         """La cuenta es el usuario asignado en Chatwoot. Sin él, la del asesor
         que más mensajes envió (con los mensajes guardados si no llegaron
         nuevos); si ningún asesor escribió, ninguna."""
+        conversacion.cuenta_por_mensajes = False
+        conversacion.continua_de_id = None
         if externa.usuario is not None:
             conversacion.cuenta_id = self._cuentas.asegurar("chatwoot", externa.usuario).id
-            conversacion.cuenta_por_mensajes = False
             return
-        asesor = asesor_con_mas_mensajes(conversacion.mensajes or [])
-        if asesor is None:
-            conversacion.cuenta_id = None
-            conversacion.cuenta_por_mensajes = False
+        mensajes = conversacion.mensajes or []
+        asesor = asesor_con_mas_mensajes(mensajes)
+        if asesor is not None:
+            conversacion.cuenta_id = self._cuentas.asegurar("chatwoot", asesor.cuenta).id
+            conversacion.cuenta_por_mensajes = True
             return
-        conversacion.cuenta_id = self._cuentas.asegurar("chatwoot", asesor.cuenta).id
-        conversacion.cuenta_por_mensajes = True
+        anterior = self._conversacion_anterior(conversacion) if es_abandonada(mensajes) else None
+        if anterior is not None:
+            conversacion.cuenta_id = anterior.cuenta_id
+            conversacion.continua_de_id = anterior.id
+            return
+        conversacion.cuenta_id = None
+
+    def _conversacion_anterior(self, conversacion: Conversacion) -> Conversacion | None:
+        """La última conversación propia del mismo cliente, si su última
+        actividad fue hasta el plazo de finalización antes de esta."""
+        if conversacion.cliente_id is None:
+            return None
+        consulta = (
+            select(Conversacion)
+            .where(
+                Conversacion.cliente_id == conversacion.cliente_id,
+                Conversacion.continua_de_id.is_(None),
+                Conversacion.inicio < conversacion.inicio,
+                func.coalesce(Conversacion.ultima_actividad, Conversacion.inicio)
+                >= conversacion.inicio - self._plazo_finalizacion,
+            )
+            .order_by(Conversacion.inicio.desc())
+            .limit(1)
+        )
+        if conversacion.id is not None:
+            consulta = consulta.where(Conversacion.id != conversacion.id)
+        return self._sesion.scalar(consulta)
+
+    def _actualizar_finalizaciones(self, conversacion_ids: list[int]) -> None:
+        """Las finalizaciones automáticas toman el asesor actual de la
+        conversación que finalizan."""
+        if not conversacion_ids:
+            return
+        for finalizacion in self._sesion.scalars(
+            select(Conversacion).where(
+                Conversacion.continua_de_id.in_(conversacion_ids),
+                Conversacion.asignacion == ASIGNACION_AUTOMATICA,
+            )
+        ):
+            finalizacion.cuenta_id = self._sesion.get(
+                Conversacion, finalizacion.continua_de_id
+            ).cuenta_id
+            self._asignar_automatica(finalizacion)
+        self._sesion.flush()
 
     def _existentes(self, modelo, ids_externos: list[str]) -> dict:
         if not ids_externos:
@@ -198,6 +260,13 @@ class ServicioInteracciones:
     # --- Asignación -----------------------------------------------------------
 
     def _resolver(self, interaccion) -> AsignacionResuelta:
+        if getattr(interaccion, "continua_de_id", None) is not None:
+            anterior = self._sesion.get(Conversacion, interaccion.continua_de_id)
+            return AsignacionResuelta(
+                persona_id=anterior.persona_id,
+                motivo=MOTIVO_FINALIZACION.format(anterior=anterior.id_externo),
+                regla_id=anterior.regla_id,
+            )
         if interaccion.cuenta_id is None:
             motivo = MOTIVO_SIN_USUARIO
             if isinstance(interaccion, Conversacion) and interaccion.mensajes is not None:
@@ -233,12 +302,16 @@ class ServicioInteracciones:
         interaccion.regla_id = None
         interaccion.motivo_asignacion = MOTIVO_MANUAL
         self._sesion.flush()
+        if tipo == "conversacion":
+            self._actualizar_finalizaciones([interaccion.id])
 
     def volver_a_automatica(self, tipo: Tipo, interaccion_id: int) -> None:
         interaccion = self._obtener(tipo, interaccion_id)
         interaccion.asignacion = ASIGNACION_AUTOMATICA
         self._asignar_automatica(interaccion)
         self._sesion.flush()
+        if tipo == "conversacion":
+            self._actualizar_finalizaciones([interaccion.id])
 
     def _obtener(self, tipo: Tipo, interaccion_id: int):
         interaccion = self._sesion.get(MODELOS[tipo], interaccion_id)
@@ -257,10 +330,14 @@ class ServicioInteracciones:
                 modelo.cuenta_id == cuenta_id,
                 modelo.inicio >= desde,
                 modelo.asignacion == ASIGNACION_AUTOMATICA,
-            )
+            ).order_by(modelo.inicio)
             for interaccion in self._sesion.scalars(consulta):
+                cambio = self._asignar_automatica(interaccion)
+                # Una finalización sigue a su conversación, pero no se cuenta aparte.
+                if getattr(interaccion, "continua_de_id", None) is not None:
+                    continue
                 resumen.revisadas += 1
-                resumen.cambiaron += self._asignar_automatica(interaccion)
+                resumen.cambiaron += cambio
                 conteo[interaccion.persona_id] = conteo.get(interaccion.persona_id, 0) + 1
         self._sesion.flush()
 

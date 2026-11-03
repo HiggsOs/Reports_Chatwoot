@@ -44,6 +44,8 @@ class ElementoHistorial(BaseModel):
     motivo: str
     resumen: str
     enlace_plataforma: str | None = None  # la llamada en CloudTalk
+    # Finaliza la conversación anterior: se muestra, pero no se cuenta aparte.
+    finalizacion: bool = False
 
 
 class Historial(BaseModel):
@@ -67,11 +69,11 @@ def formatear_duracion(segundos: int | None) -> str:
     return f"{minutos} min {resto:02d} s" if minutos else f"{resto} s"
 
 
-def _contar(modelo):
+def _contar(modelo, *condiciones):
     return (
         select(func.count())
         .select_from(modelo)
-        .where(modelo.cliente_id == Cliente.id)
+        .where(modelo.cliente_id == Cliente.id, *condiciones)
         .correlate(Cliente)
         .scalar_subquery()
     )
@@ -87,7 +89,9 @@ def _ultima(modelo):
 
 
 def _consulta_resumen():
-    llamadas, conversaciones = _contar(Llamada), _contar(Conversacion)
+    llamadas = _contar(Llamada)
+    # Las finalizaciones son parte de la conversación anterior.
+    conversaciones = _contar(Conversacion, Conversacion.continua_de_id.is_(None))
     ultima = func.greatest(_ultima(Llamada), _ultima(Conversacion))
     return select(Cliente, llamadas, conversaciones, ultima), ultima
 
@@ -172,15 +176,19 @@ def historial(
     )
     for conversacion, cuenta, persona in conversaciones:
         partes = [f"Chat por {conversacion.canal}", traducir_estado(conversacion.estado)]
+        if conversacion.continua_de_id is not None:
+            partes.insert(0, "Finalización de la conversación anterior")
         if conversacion.etiquetas:
             partes.append(", ".join(conversacion.etiquetas))
-        elementos.append(
-            _elemento("conversacion", conversacion, cuenta, persona, zona, " · ".join(partes))
-        )
+        elemento = _elemento("conversacion", conversacion, cuenta, persona, zona, " · ".join(partes))
+        elemento.finalizacion = conversacion.continua_de_id is not None
+        elementos.append(elemento)
 
     elementos.sort(key=lambda e: e.inicio, reverse=True)
     por_asesor: dict[str, int] = {}
     for elemento in elementos:
+        if elemento.finalizacion:
+            continue
         clave = elemento.asesor or SIN_ASIGNAR
         por_asesor[clave] = por_asesor.get(clave, 0) + 1
     return Historial(
