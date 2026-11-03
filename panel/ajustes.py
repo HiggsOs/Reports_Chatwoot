@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from config import cargar_config
 from panel.db.base import unidad_de_trabajo
 from panel.db.modelos import Ajuste
 
@@ -173,3 +174,32 @@ def origenes(entorno: Mapping[str, str], lectura: LecturaAjustes) -> dict[str, s
         elif (entorno.get(clave) or "").strip():
             resultado[clave] = "entorno"
     return resultado
+
+
+def con_cambios(
+    entorno: Mapping[str, str], lectura: LecturaAjustes, cambios: Mapping[str, str | None]
+) -> dict[str, str]:
+    """Cómo quedaría la configuración si se guardan estos cambios. Un valor
+    vacío quita el ajuste del panel y vuelve a valer el del entorno."""
+    nuevo = {**entorno, **lectura.valores}
+    for clave, valor in cambios.items():
+        if valor:
+            nuevo[clave] = valor
+        else:
+            nuevo.pop(clave, None)
+            if entorno.get(clave):
+                nuevo[clave] = entorno[clave]
+    return nuevo
+
+
+def guardar_validado(
+    fabrica: sessionmaker[Session],
+    entorno: Mapping[str, str],
+    lectura: LecturaAjustes,
+    cambios: Mapping[str, str | None],
+) -> None:
+    """Guarda solo si la configuración resultante es válida; si no, lanza
+    ConfigError con el motivo y no toca nada."""
+    cargar_config(con_cambios(entorno, lectura, cambios))
+    with unidad_de_trabajo(fabrica) as sesion:
+        RepositorioAjustes(sesion, Cifrador.desde_entorno(entorno)).guardar(cambios)

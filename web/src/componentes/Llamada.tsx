@@ -1,0 +1,241 @@
+// Audio y transcripción de una llamada, sincronizados: un clic en una frase
+// salta a ese momento del audio y la frase que suena queda resaltada.
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, ErrorApi } from "../api/cliente";
+import type { Segmento, TranscripcionesLlamada, VersionTranscripcion } from "../api/tipos";
+import { Aviso, Boton, Cargando, ErrorCarga, Icono, Insignia } from "./basicos";
+import { Seleccion } from "./campos";
+import { useAvisos } from "./avisos";
+import { duracion, formatoFechaHora, usd } from "../utilidades/formato";
+
+const CANALES: Record<string, string> = {
+  mono: "grabación mono",
+  estereo: "estéreo: un canal por persona",
+  estereo_duplicado: "estéreo con el mismo audio en los dos canales",
+};
+
+function quien(s: Segmento): string {
+  if (s.hablante === "agente") return "Agente";
+  if (s.hablante === "cliente") return "Cliente";
+  return s.etiqueta ? `Hablante ${s.etiqueta}` : "—";
+}
+
+interface Audio { url: string; mensaje: string }
+
+function useAudio(llamadaId: number) {
+  const [audio, setAudio] = useState<Audio | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(false);
+  useEffect(() => {
+    setAudio(null);
+    setError(null);
+  }, [llamadaId]);
+  useEffect(() => () => { if (audio) URL.revokeObjectURL(audio.url); }, [audio]);
+  const cargar = async () => {
+    setCargando(true);
+    setError(null);
+    try {
+      const respuesta = await fetch(`/api/llamadas/${llamadaId}/audio`, { credentials: "same-origin" });
+      if (!respuesta.ok) {
+        const datos = await respuesta.json().catch(() => null);
+        throw new ErrorApi(respuesta.status, datos?.detail ?? "No se pudo traer el audio.");
+      }
+      const mensaje = decodeURIComponent(respuesta.headers.get("X-Panel-Mensaje") ?? "");
+      setAudio({ url: URL.createObjectURL(await respuesta.blob()), mensaje });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCargando(false);
+    }
+  };
+  return { audio, error, cargando, cargar };
+}
+
+export function PanelLlamada({ llamadaId, retencionDias }: { llamadaId: number; retencionDias: number }) {
+  const { audio, error, cargando, cargar } = useAudio(llamadaId);
+  const reproductor = useRef<HTMLAudioElement>(null);
+  const [segundo, setSegundo] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [sonando, setSonando] = useState(false);
+
+  const saltar = (s: number) => {
+    const el = reproductor.current;
+    if (!el) return;
+    el.currentTime = s;
+    void el.play();
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div className="tarjeta p" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="fila entre"><b>Audio</b>{audio && <Insignia tono="ok">Guardado {retencionDias} días</Insignia>}</div>
+        {!audio ? (
+          <>
+            <div><Boton variante="primario" icono="play_arrow" cargando={cargando} onClick={cargar}>{cargando ? "Trayendo el audio…" : "Escuchar la llamada"}</Boton></div>
+            <span className="ayuda">Descarga la grabación de CloudTalk y la guarda {retencionDias} días desde la fecha de la llamada.</span>
+            {error && <Aviso tipo="error">{error}</Aviso>}
+          </>
+        ) : (
+          <>
+            <audio ref={reproductor} src={audio.url} preload="auto"
+              onTimeUpdate={(e) => setSegundo(e.currentTarget.currentTime)}
+              onLoadedMetadata={(e) => setTotal(e.currentTarget.duration)}
+              onPlay={() => setSonando(true)} onPause={() => setSonando(false)} onEnded={() => setSonando(false)} />
+            <div className="reproductor">
+              <button type="button" className="play" aria-label={sonando ? "Pausa" : "Reproducir"}
+                onClick={() => (sonando ? reproductor.current?.pause() : reproductor.current?.play())}>
+                <Icono nombre={sonando ? "pause" : "play_arrow"} relleno />
+              </button>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                <div className="barra-audio" role="slider" aria-label="Posición del audio" aria-valuemin={0} aria-valuemax={Math.round(total)} aria-valuenow={Math.round(segundo)}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowRight") saltar(Math.min(total, segundo + 5));
+                    if (e.key === "ArrowLeft") saltar(Math.max(0, segundo - 5));
+                  }}
+                  onClick={(e) => {
+                    const caja = e.currentTarget.getBoundingClientRect();
+                    saltar(((e.clientX - caja.left) / caja.width) * total);
+                  }}>
+                  <span style={{ width: `${total ? (segundo / total) * 100 : 0}%` }} />
+                </div>
+                <span className="mono cap">{duracion(segundo)} / {duracion(total)}</span>
+              </div>
+              <select className="entrada" style={{ width: 80 }} aria-label="Velocidad" defaultValue="1"
+                onChange={(e) => { if (reproductor.current) reproductor.current.playbackRate = Number(e.target.value); }}>
+                {["1", "1.25", "1.5", "2"].map((v) => <option key={v} value={v}>{v.replace(".", ",")}×</option>)}
+              </select>
+            </div>
+            {audio.mensaje && <span className="ayuda">{audio.mensaje}</span>}
+          </>
+        )}
+      </div>
+      <Transcripcion llamadaId={llamadaId} segundo={audio ? segundo : null} alSaltar={audio ? saltar : undefined} />
+    </div>
+  );
+}
+
+function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; segundo: number | null; alSaltar?: (s: number) => void }) {
+  const cliente = useQueryClient();
+  const avisar = useAvisos();
+  const consulta = useQuery({
+    queryKey: ["transcripciones", llamadaId],
+    queryFn: () => api.get<TranscripcionesLlamada>(`/api/llamadas/${llamadaId}/transcripciones`),
+  });
+  const [versionId, setVersionId] = useState<number | null>(null);
+  const [modelo, setModelo] = useState<string>("");
+  const datos = consulta.data;
+  useEffect(() => { setVersionId(null); setModelo(""); }, [llamadaId]);
+  const version: VersionTranscripcion | undefined = datos?.versiones.find((v) => v.id === versionId) ?? datos?.versiones[0];
+  const opcion = datos?.opciones.find((o) => o.clave === modelo) ?? datos?.opciones[0];
+
+  const refrescar = () => {
+    cliente.invalidateQueries({ queryKey: ["transcripciones", llamadaId] });
+    cliente.invalidateQueries({ queryKey: ["interacciones"] });
+  };
+  const transcribir = useMutation({
+    mutationFn: () => api.post<VersionTranscripcion>(`/api/llamadas/${llamadaId}/transcripciones`, { proveedor: opcion?.clave }),
+    onSuccess: (v) => { setVersionId(v.id); refrescar(); avisar("Transcripción lista."); },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  const principal = useMutation({
+    mutationFn: (id: number) => api.post(`/api/transcripciones/${id}/principal`),
+    onSuccess: () => { refrescar(); avisar("Ahora es la versión principal."); },
+  });
+
+  const actual = useMemo(() => {
+    if (segundo === null || !version) return -1;
+    return version.segmentos.findIndex((s) => s.inicio !== null && s.fin !== null && segundo >= s.inicio && segundo < s.fin);
+  }, [segundo, version]);
+
+  if (consulta.isLoading) return <Cargando texto="Cargando la transcripción…" />;
+  if (consulta.error) return <ErrorCarga error={consulta.error} />;
+  if (!datos?.configurada)
+    return <Aviso tipo="atencion">La transcripción no está configurada. Se configura en Transcripción › Configuración (y hace falta CloudTalk en General).</Aviso>;
+
+  return (
+    <div className="tarjeta p" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="fila entre" style={{ alignItems: "flex-end" }}>
+        <b>Transcripción</b>
+        {datos.versiones.length > 1 && version && (
+          <div style={{ width: 360 }}>
+            <Seleccion etiqueta="Versión" valor={version.id} alCambiar={setVersionId}
+              opciones={datos.versiones.map((v) => ({ valor: v.id, texto: `${v.modelo} · ${formatoFechaHora(v.creado_en)}${v.principal ? " (principal)" : ""}` }))} />
+          </div>
+        )}
+      </div>
+
+      {version ? (
+        <>
+          <span className="cap">{version.modelo} · {CANALES[version.canales_audio] ?? version.canales_audio} · {usd(version.costo_estimado === null ? null : Number(version.costo_estimado), 4)}</span>
+          <div className="dialogo" style={{ borderTop: "1px solid var(--fondo)", paddingTop: 8 }}>
+            {version.segmentos.length === 0 && <span className="cap">La transcripción no tiene texto.</span>}
+            {version.segmentos.map((s, i) => (
+              <div key={i} className={`linea${i === actual ? " actual" : ""}`}>
+                {s.inicio !== null ? (
+                  <button type="button" className="saltar" disabled={!alSaltar} onClick={() => alSaltar?.(s.inicio!)}
+                    aria-label={`Ir a ${duracion(s.inicio)}`} title={alSaltar ? "Ir a este momento" : "Escuche la llamada para saltar"}>
+                    <Icono nombre="play_arrow" relleno tamano={14} />{duracion(s.inicio)}
+                  </button>
+                ) : <span />}
+                <b className={s.hablante === "agente" ? "quien-agente" : "quien-cliente"}>{quien(s)}</b>
+                <span>{s.texto}</span>
+              </div>
+            ))}
+          </div>
+          <QuienEsQuien version={version} alGuardar={refrescar} />
+          {!version.principal && (
+            <div><Boton chico icono="star" cargando={principal.isPending} onClick={() => principal.mutate(version.id)}>Usar esta como principal</Boton></div>
+          )}
+          <span className="cap">La transcripción se conserva 3 años.</span>
+        </>
+      ) : (
+        <span className="cap">Esta llamada todavía no tiene transcripción.</span>
+      )}
+
+      {datos.opciones.length > 0 && opcion && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: "1px solid var(--fondo)", paddingTop: 10 }}>
+          <Seleccion etiqueta="Proveedor y modelo" valor={opcion.clave} alCambiar={setModelo}
+            opciones={datos.opciones.map((o) => ({ valor: o.clave, texto: `${o.titulo} · ${o.devuelve}` }))} />
+          <div className="fila entre">
+            <span className="cap">Costo estimado: <b className="mono">{usd(opcion.costo_usd, 4)}</b></span>
+            <Boton variante={version ? undefined : "primario"} icono="graphic_eq" cargando={transcribir.isPending} onClick={() => transcribir.mutate()}>
+              {transcribir.isPending ? "Transcribiendo… puede tardar un minuto" : version ? "Transcribir de nuevo" : "Transcribir"}
+            </Boton>
+          </div>
+          {version && <span className="ayuda">Crea una versión nueva; la principal no cambia hasta que la elija.</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuienEsQuien({ version, alGuardar }: { version: VersionTranscripcion; alGuardar: () => void }) {
+  const etiquetas = useMemo(
+    () => [...new Set(version.segmentos.filter((s) => s.hablante === "desconocido" && s.etiqueta).map((s) => s.etiqueta!))].sort(),
+    [version],
+  );
+  const [agente, setAgente] = useState(etiquetas[0] ?? "");
+  const avisar = useAvisos();
+  const guardar = useMutation({
+    mutationFn: () => api.post(`/api/transcripciones/${version.id}/hablantes`, { agente, etiquetas }),
+    onSuccess: () => { avisar("Hablantes guardados."); alGuardar(); },
+  });
+  if (etiquetas.length === 0) return null;
+  return (
+    <Aviso tipo="atencion">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span>Esta versión separó las voces, pero no sabe quién es quién.</span>
+        <div className="fila" role="radiogroup" aria-label="¿Quién es el agente?">
+          <b>¿Quién es el agente?</b>
+          {etiquetas.map((e) => (
+            <label key={e} className="marcador"><input type="radio" name={`agente-${version.id}`} checked={agente === e} onChange={() => setAgente(e)} />Hablante {e}</label>
+          ))}
+          <Boton chico cargando={guardar.isPending} onClick={() => guardar.mutate()}>Guardar</Boton>
+        </div>
+      </div>
+    </Aviso>
+  );
+}
