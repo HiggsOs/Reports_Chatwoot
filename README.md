@@ -17,6 +17,21 @@ La columna `canal` trae el nombre del inbox por el que entró la conversación
 —por ejemplo el número de WhatsApp concreto—, no el tipo de canal, para que se
 distingan entre sí varias bandejas del mismo tipo.
 
+## Arquitectura
+
+- **Frontend** (`web/`): React con TypeScript, compilado con Vite. Sigue el
+  diseño del panel (paleta, iconos Material Symbols, barra lateral retráctil).
+- **API** (`api/`): FastAPI. Solo traduce HTTP a llamadas a `panel/`.
+- **Lógica y datos** (`panel/`): asignación, sincronización, audio,
+  transcripción y ajustes, sobre PostgreSQL. La comparten la API, la
+  sincronización y la versión Streamlit.
+- **Sincronización**: `python -m panel.sync`, un servicio aparte.
+
+En producción, un solo servicio sirve la API y el React ya compilado
+(`uvicorn api.main:crear_app --factory`). La versión Streamlit (`app.py` y
+`ui/`) sigue funcionando mientras dura la transición, con su propio comando de
+inicio (ver el `Dockerfile`).
+
 ## Uso
 
 Se entra con usuario y contraseña. Las páginas están en el menú lateral, en
@@ -134,7 +149,9 @@ python generar_hash.py 'la-contraseña-elegida'
    cada despliegue.
 4. Cargar las variables de entorno de la tabla anterior, con `DATABASE_URL`
    apuntando al servicio Postgres.
-5. Asignar el dominio. EasyPanel gestiona el HTTPS.
+5. Asignar el dominio. EasyPanel gestiona el HTTPS. El panel (API y React) usa
+   el comando por defecto del `Dockerfile`. La cookie de sesión exige HTTPS;
+   solo en un entorno sin HTTPS se desactiva con `PANEL_COOKIE_SEGURA=0`.
 6. Crear un segundo servicio de tipo App, **sincronización**, con el mismo
    repositorio, las mismas variables y este comando de inicio (no necesita
    dominio ni volumen):
@@ -169,8 +186,22 @@ pip install -r requirements.txt
 alembic upgrade head
 ```
 
+La API, en un terminal (en local no hay HTTPS, por eso `PANEL_COOKIE_SEGURA=0`):
+
 ```bash
-streamlit run app.py
+PANEL_COOKIE_SEGURA=0 uvicorn api.main:crear_app --factory --reload --port 8000
+```
+
+El frontend, en otro terminal: Vite recarga al guardar y manda `/api` a la API.
+
+```bash
+cd web && npm install && npm run dev
+```
+
+Las pruebas del frontend (formato en español, formularios de reglas):
+
+```bash
+cd web && npm test
 ```
 
 `alembic upgrade head` y la app leen `DATABASE_URL`. Las pruebas de base de

@@ -97,7 +97,7 @@ lo demás.
 | Exportación de reportes | **Strategy** (un exportador por formato) | — |
 | Avance y avisos de procesos largos | **Observer** (callbacks) | — |
 | Ajustes cargados desde el panel | **Overlay** sobre el entorno | Repository, cifrado |
-| Interfaz (Streamlit) | **Registro de páginas** + inyección por nombre | Contenedor / presentación, Strategy (Vista), Form Object, Flash message |
+| Interfaz (Streamlit y React) | **Registro de páginas** + inyección por nombre | Contenedor / presentación, Strategy (Vista), Form Object, Flash message, caché de servidor (TanStack Query) |
 
 Las secciones siguientes explican cada una.
 
@@ -385,6 +385,48 @@ Reglas:
 `tests/test_paginas.py` dibuja cada página registrada con `AppTest` contra una
 base real, vacía y con datos, y el detalle de llamadas y conversaciones. Una
 página nueva entra sola en esa prueba al sumarse al registro.
+
+### 15.4 Frontend en React (`web/`) y API (`api/`)
+
+La interfaz se está pasando de Streamlit a React para que sea igual al diseño
+y no vuelva a ejecutar la página entera en cada clic. Se mantienen los mismos
+patrones, ahora en dos capas:
+
+**API (FastAPI, `api/`)**
+
+- **Raíz de composición** (`api/contenedor.py`): arma la configuración (entorno
+  con los ajustes del panel encima), la fábrica de sesiones y los servicios.
+  `recargar()` los descarta al guardar un ajuste.
+- **Una unidad de trabajo por petición** (`api/dependencias.py`): la sesión se
+  confirma al terminar la petición o se deshace si hubo un error.
+- **Rutas por área** (`api/rutas/`): solo traducen HTTP a `panel/` y devuelven
+  los modelos Pydantic que ya existían (`FilaLlamada`, `Historial`…).
+- **Seguridad** (`api/seguridad.py`): cookie firmada HttpOnly y SameSite=Strict,
+  cabecera `X-Panel` obligatoria en lo que cambia algo (sin CSRF) y bloqueo
+  tras 5 intentos de login fallidos.
+
+**Frontend (React, `web/src/`)**
+
+```
+api/            cliente HTTP y tipos (espejo de los modelos de Python)
+componentes/    piezas reutilizables: tabla, campos, insignias, barra lateral,
+                reproductor sincronizado con la transcripción, chat, asignación
+paginas/        una pantalla por archivo + registro.tsx (registro de páginas)
+utilidades/     formato en español (fechas Europe/Madrid, coma decimal, +34…)
+estilos.css     tokens del sistema visual
+```
+
+- **Registro de páginas** (`paginas/registro.tsx`): sección, título, ruta,
+  icono y componente (cargado bajo demanda). La barra lateral y las rutas
+  salen de ahí.
+- **Estado del servidor con TanStack Query**: caché por clave, invalidación
+  tras cada cambio y reintentos; las pantallas no guardan copias propias.
+- **Strategy para variantes**: Llamadas y Conversaciones son
+  `PaginaInteracciones` con otra `Vista`; los formularios de cada estrategia de
+  asignación se registran por nombre (`componentes/formulariosRegla.tsx`).
+- **Contenedor / presentación**: las páginas piden datos; los componentes
+  reciben props y avisan qué eligió el usuario.
+- **Avisos** (`componentes/avisos.tsx`): toda confirmación pasa por `useAvisos()`.
 
 ## 16. Ajustes cargados desde el panel
 
