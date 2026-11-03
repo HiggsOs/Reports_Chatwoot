@@ -109,6 +109,7 @@ se guardan cifradas con `PANEL_CLAVE_CIFRADO` (o, si no está, con
 | `SYNC_INTERVALO_MINUTOS` | Cada cuánto corre la sincronización. Por defecto `15` |
 | `SYNC_DIAS_INICIALES` | Cuántos días hacia atrás trae la primera sincronización de cada fuente. Por defecto `30` |
 | `CHATWOOT_DIAS_RELECTURA` | Cuántos días hacia atrás relee Chatwoot en cada ciclo, porque las conversaciones cambian después de creadas. Por defecto `14` |
+| `CHATWOOT_DIAS_FINALIZACION` | Hasta cuántos días después de la conversación anterior de un cliente una conversación abandonada cuenta como su finalización (ver *Cuentas y reglas de asignación*). Por defecto `7` |
 | `ALMACEN_TIPO` | Dónde se guardan los audios escuchados: `sftp` (el hosting), `local` (una carpeta en `DATA_DIR/audios`, solo para desarrollo) o vacío (se escuchan pero no se guardan) |
 | `FTP_HOST`, `FTP_PORT`, `FTP_USER`, `FTP_PASSWORD` | Acceso SFTP a la cuenta FTP de los audios. En el hosting, `FTP_PORT=8023` |
 | `FTP_DIR` | Carpeta de los audios dentro de esa cuenta. Por defecto `/` |
@@ -262,7 +263,17 @@ horario de verano; inicio incluido y fin excluido.
   y se aplica la regla de esa cuenta, así que un cambio de regla también la
   reasigna. El motivo empieza por «Sin usuario en Chatwoot: el asesor que más
   mensajes envió». Si después Chatwoot le asigna un usuario, manda ese
-  usuario. Si ningún asesor escribió, queda en *Sin asignar*.
+  usuario.
+- Una **conversación abandonada** (sin usuario en Chatwoot, sin respuestas de
+  asesores y con un solo mensaje del cliente) que llega hasta
+  `CHATWOOT_DIAS_FINALIZACION` días (7 por defecto) después de la última
+  actividad de la conversación anterior del mismo cliente se toma como su
+  **finalización**, no como una conversación nueva: queda ligada a la anterior,
+  toma su asesor (y lo sigue si a la anterior se la reasigna) y no aparece en
+  *Conversaciones*, *Sin asignar*, los conteos ni el CSV; sí se ve en el
+  historial del cliente. La anterior conserva su cierre. Si después un asesor
+  le responde o el cliente escribe más, vuelve a ser una conversación propia.
+- Si ningún asesor escribió y no es una finalización, queda en *Sin asignar*.
 - Una interacción asignada a mano (en *Sin asignar* o en el detalle de
   *Llamadas* y *Conversaciones*) no la cambian ni la sincronización ni las
   reglas nuevas, hasta que se vuelve a la asignación automática.

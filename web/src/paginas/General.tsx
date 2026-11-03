@@ -139,7 +139,7 @@ function CloudTalk({ a, estado, error, guardar }: { a: Ajustes; estado: ReactNod
 }
 
 function Chatwoot({ a, estado, error, guardar }: { a: Ajustes; estado: ReactNode; error: ReactNode; guardar: Guardar }) {
-  const form = useFormulario(a, ["CHATWOOT_BASE_URL", "CHATWOOT_ACCOUNT_ID", "CHATWOOT_API_TOKEN", "CHATWOOT_DIAS_RELECTURA"]);
+  const form = useFormulario(a, ["CHATWOOT_BASE_URL", "CHATWOOT_ACCOUNT_ID", "CHATWOOT_API_TOKEN", "CHATWOOT_DIAS_RELECTURA", "CHATWOOT_DIAS_FINALIZACION"]);
   const prueba = usePrueba("chatwoot");
   return (
     <Seccion icono="chat" titulo="Chatwoot" estado={estado}
@@ -151,9 +151,11 @@ function Chatwoot({ a, estado, error, guardar }: { a: Ajustes; estado: ReactNode
           ayuda={<>Es el número de la URL: /app/accounts/<b>1</b>/…</>} />
       </div>
       <CampoAjuste etiqueta="Token de acceso" clave="CHATWOOT_API_TOKEN" ajustes={a} form={form} />
-      <div style={{ maxWidth: 320 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
         <CampoAjuste etiqueta="Releer las conversaciones de los últimos (días)" clave="CHATWOOT_DIAS_RELECTURA" ajustes={a} form={form} tipo="number" placeholder="14"
           ayuda="Las conversaciones cambian después de creadas: se resuelven o se reasignan." />
+        <CampoAjuste etiqueta="Unir abandonadas a la anterior hasta (días)" clave="CHATWOOT_DIAS_FINALIZACION" ajustes={a} form={form} tipo="number" placeholder="7"
+          ayuda="Una conversación sin asesor con un solo mensaje del cliente cuenta como el final de su conversación anterior." />
       </div>
       <ResultadoPrueba prueba={prueba} />
       {error}

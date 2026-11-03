@@ -135,10 +135,12 @@ class SincronizadorConversaciones(Sincronizador):
         desde_inicial,
         dias_relectura: int,
         ahora=ahora_utc,
+        dias_finalizacion: int = 7,
     ) -> None:
         super().__init__(fabrica, desde_inicial, ahora)
         self._fuente = fuente
         self._relectura = timedelta(days=dias_relectura)
+        self._finalizacion = timedelta(days=dias_finalizacion)
 
     def calcular_desde(self, anterior, hasta):
         if anterior is None:
@@ -164,7 +166,9 @@ class SincronizadorConversaciones(Sincronizador):
         return datos
 
     def guardar(self, sesion, datos):
-        return ServicioInteracciones(sesion).guardar_conversaciones(datos)
+        return ServicioInteracciones(
+            sesion, plazo_finalizacion=self._finalizacion
+        ).guardar_conversaciones(datos)
 
 
 def ejecutar_ciclo(

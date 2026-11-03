@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from chatwoot import ClienteChatwoot
 from cloudtalk import ClienteCloudTalk, a_fecha_utc, fue_grabada
 from panel.fuentes.cuentas import CuentaExterna
-from reporte import TIPO_SALIENTE, a_fecha_local, resolver_canal
+from reporte import TIPO_ENTRANTE, TIPO_SALIENTE, a_fecha_local, resolver_canal
 from reporte_cloudtalk import nombre_agente
 
 DIRECCIONES_CLOUDTALK = {"incoming": "entrante", "outgoing": "saliente", "internal": "interna"}
@@ -99,6 +99,21 @@ def asesor_con_mas_mensajes(mensajes: list[dict]) -> AsesorDeMensajes | None:
         mensajes=conteo[elegido],
         total=sum(conteo.values()),
     )
+
+
+def es_abandonada(mensajes: list[dict]) -> bool:
+    """Ningún asesor respondió y el cliente escribió un solo mensaje.
+
+    Las notas privadas, los bots y las actividades no cuentan.
+    """
+    if asesor_con_mas_mensajes(mensajes) is not None:
+        return False
+    del_cliente = [
+        msg
+        for msg in mensajes
+        if msg.get("message_type") == TIPO_ENTRANTE and not msg.get("private")
+    ]
+    return len(del_cliente) == 1
 
 
 def _numero(valor) -> float:

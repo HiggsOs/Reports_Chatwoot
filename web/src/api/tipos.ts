@@ -55,6 +55,7 @@ export interface ResumenCliente { id: number; telefono: string; nombre: string |
 export interface ElementoHistorial {
   tipo: TipoInteraccion; id: number; id_externo: string; inicio: string; cuenta: string; persona_id: number | null;
   asesor: string; asignacion: string; motivo: string; resumen: string; enlace_plataforma: string | null;
+  finalizacion: boolean;
 }
 export interface Historial { cliente: ResumenCliente; elementos: ElementoHistorial[]; por_asesor: Record<string, number> }
 

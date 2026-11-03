@@ -140,6 +140,8 @@ def listar_conversaciones(
         .outerjoin(Cuenta, Conversacion.cuenta_id == Cuenta.id)
         .outerjoin(Persona, Conversacion.persona_id == Persona.id)
         .outerjoin(cliente, Conversacion.cliente_id == cliente.id)
+        # Una finalización es parte de la conversación anterior, no una nueva.
+        .where(Conversacion.continua_de_id.is_(None))
     )
     filas = []
     for conv, cuenta, persona, cli in sesion.execute(
@@ -182,9 +184,13 @@ def resumen(sesion: Session, desde: datetime, hasta: datetime) -> Resumen:
     con_reglas = select(ReglaAsignacion.cuenta_id)
     return Resumen(
         llamadas=contar(Llamada),
-        conversaciones=contar(Conversacion),
+        conversaciones=contar(Conversacion, Conversacion.continua_de_id.is_(None)),
         llamadas_sin_asignar=contar(Llamada, Llamada.persona_id.is_(None)),
-        conversaciones_sin_asignar=contar(Conversacion, Conversacion.persona_id.is_(None)),
+        conversaciones_sin_asignar=contar(
+            Conversacion,
+            Conversacion.persona_id.is_(None),
+            Conversacion.continua_de_id.is_(None),
+        ),
         cuentas_sin_regla=sesion.scalar(
             select(func.count())
             .select_from(Cuenta)

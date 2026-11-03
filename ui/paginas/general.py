@@ -162,6 +162,9 @@ def _chatwoot(formulario: FormularioAjustes, cfg: Config, punto) -> None:
             relectura = formulario.texto(
                 "Releer las conversaciones de los últimos (días)", "CHATWOOT_DIAS_RELECTURA", "14",
             )
+            finalizacion = formulario.texto(
+                "Unir abandonadas a la anterior hasta (días)", "CHATWOOT_DIAS_FINALIZACION", "7",
+            )
             st.caption("El ID de la cuenta es el número de la URL: /app/accounts/**1**/…")
             guardar, probar = _botones()
         token = token or formulario.valor("CHATWOOT_API_TOKEN")
@@ -182,6 +185,7 @@ def _chatwoot(formulario: FormularioAjustes, cfg: Config, punto) -> None:
                 "CHATWOOT_BASE_URL": url,
                 "CHATWOOT_ACCOUNT_ID": cuenta,
                 "CHATWOOT_DIAS_RELECTURA": relectura,
+                "CHATWOOT_DIAS_FINALIZACION": finalizacion,
             }
             if nuevo := st.session_state.get("gen-cw-token"):
                 cambios["CHATWOOT_API_TOKEN"] = nuevo

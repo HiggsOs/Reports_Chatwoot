@@ -134,7 +134,11 @@ def sincronizadores(fabrica: sessionmaker[Session], cfg: Config) -> list[Sincron
         chatwoot = ClienteChatwoot(cfg.base_url, cfg.account_id, cfg.api_token)
         lista.append(
             SincronizadorConversaciones(
-                fabrica, FuenteChatwoot(chatwoot), desde_inicial, cfg.chatwoot_dias_relectura
+                fabrica,
+                FuenteChatwoot(chatwoot),
+                desde_inicial,
+                cfg.chatwoot_dias_relectura,
+                dias_finalizacion=cfg.chatwoot_dias_finalizacion,
             )
         )
     audio = servicio_audio(fabrica, cfg)

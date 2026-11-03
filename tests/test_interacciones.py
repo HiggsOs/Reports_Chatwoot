@@ -12,7 +12,9 @@ from panel.db.repositorios.personas import RepositorioPersonas
 from panel.esquemas.personas import AsesorArea
 from panel.fuentes.cuentas import CuentaExterna
 from panel.fuentes.interacciones import ConversacionExterna, LlamadaExterna
+from panel.servicios import clientes, consultas
 from panel.servicios.interacciones import (
+    MOTIVO_FINALIZACION,
     MOTIVO_MANUAL,
     MOTIVO_POR_MENSAJES,
     MOTIVO_SIN_USUARIO,
@@ -43,12 +45,14 @@ def llamada(id_externo, inicio, telefono="612345678", agente=AGENTE):
     )
 
 
-def conversacion(id_externo, usuario, ultima=None, estado="open", telefono="+34612345678"):
+def conversacion(
+    id_externo, usuario, ultima=None, estado="open", telefono="+34612345678", inicio=MAÑANA
+):
     return ConversacionExterna(
         id_externo=id_externo,
         usuario=usuario,
-        inicio=MAÑANA,
-        ultima_actividad=ultima or MAÑANA,
+        inicio=inicio,
+        ultima_actividad=ultima or inicio,
         canal="WhatsApp",
         estado=estado,
         etiquetas=["venta"],
@@ -379,3 +383,112 @@ def test_ultima_actividad_guardada(fabrica, personas):
             "5": (ultima, True),
             "7": (MAÑANA, False),
         }
+
+
+# --- Finalización de una conversación abandonada -----------------------------
+
+
+UN_MENSAJE = [{"id": 1, "message_type": 0, "content": "Gracias", "created_at": 1793800000}]
+DIA_SIGUIENTE = MAÑANA + timedelta(days=1)
+
+
+def conversacion_de(fabrica, id_externo):
+    with unidad_de_trabajo(fabrica) as sesion:
+        return sesion.scalar(select(Conversacion).where(Conversacion.id_externo == id_externo))
+
+
+def test_la_abandonada_finaliza_la_anterior_y_toma_su_asesor(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    guardar_conversaciones(
+        fabrica, (conversacion("6", None, inicio=DIA_SIGUIENTE), UN_MENSAJE)
+    )
+    anterior, abandonada = conversacion_de(fabrica, "5"), conversacion_de(fabrica, "6")
+    assert abandonada.continua_de_id == anterior.id
+    assert abandonada.persona_id == personas["ana"]
+    assert abandonada.cuenta_id == anterior.cuenta_id
+    assert abandonada.motivo_asignacion == MOTIVO_FINALIZACION.format(anterior="5")
+
+
+def test_la_abandonada_no_cuenta_como_conversacion_nueva(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    guardar_conversaciones(
+        fabrica, (conversacion("6", None, inicio=DIA_SIGUIENTE), UN_MENSAJE)
+    )
+    with unidad_de_trabajo(fabrica) as sesion:
+        filtros = consultas.Filtros(desde=MAÑANA - timedelta(days=1), hasta=MAÑANA + timedelta(days=3))
+        assert [f.id_externo for f in consultas.listar_conversaciones(sesion, filtros)] == ["5"]
+        conteo = consultas.resumen(sesion, filtros.desde, filtros.hasta)
+        assert (conteo.conversaciones, conteo.conversaciones_sin_asignar) == (1, 0)
+
+        cliente_id = conversacion_de(fabrica, "5").cliente_id
+        historial = clientes.historial(sesion, cliente_id)
+        assert historial.cliente.conversaciones == 1
+        assert [e.finalizacion for e in historial.elementos] == [True, False]
+        assert sum(historial.por_asesor.values()) == 1
+
+
+def test_en_el_mismo_lote_tambien_encuentra_la_anterior(fabrica, personas):
+    guardar_conversaciones(
+        fabrica,
+        (conversacion("6", None, inicio=DIA_SIGUIENTE), UN_MENSAJE),
+        (conversacion("5", USUARIO_ANA), MENSAJES),
+    )
+    assert conversacion_de(fabrica, "6").persona_id == personas["ana"]
+
+
+def test_pasado_el_plazo_queda_como_conversacion_propia(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    guardar_conversaciones(
+        fabrica, (conversacion("6", None, inicio=MAÑANA + timedelta(days=8)), UN_MENSAJE)
+    )
+    abandonada = conversacion_de(fabrica, "6")
+    assert (abandonada.continua_de_id, abandonada.persona_id) == (None, None)
+
+
+def test_el_plazo_se_puede_cambiar(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    with unidad_de_trabajo(fabrica) as sesion:
+        ServicioInteracciones(sesion, plazo_finalizacion=timedelta(hours=12)).guardar_conversaciones(
+            [(conversacion("6", None, inicio=DIA_SIGUIENTE), UN_MENSAJE)]
+        )
+    assert conversacion_de(fabrica, "6").continua_de_id is None
+
+
+def test_dos_mensajes_del_cliente_no_es_abandonada(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    dos = UN_MENSAJE + [{"id": 2, "message_type": 0, "content": "¿Hola?", "created_at": 1793800100}]
+    guardar_conversaciones(fabrica, (conversacion("6", None, inicio=DIA_SIGUIENTE), dos))
+    assert conversacion_de(fabrica, "6").continua_de_id is None
+
+
+def test_otro_cliente_no_se_une(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    guardar_conversaciones(
+        fabrica,
+        (conversacion("6", None, inicio=DIA_SIGUIENTE, telefono="+34699999999"), UN_MENSAJE),
+    )
+    assert conversacion_de(fabrica, "6").continua_de_id is None
+
+
+def test_si_la_anterior_cambia_de_asesor_la_finalizacion_la_sigue(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    guardar_conversaciones(
+        fabrica, (conversacion("6", None, inicio=DIA_SIGUIENTE), UN_MENSAJE)
+    )
+    with unidad_de_trabajo(fabrica) as sesion:
+        ServicioInteracciones(sesion).asignar_manual(
+            "conversacion", conversacion_de(fabrica, "5").id, personas["juan"]
+        )
+    assert conversacion_de(fabrica, "6").persona_id == personas["juan"]
+
+
+def test_si_un_asesor_responde_deja_de_ser_finalizacion(fabrica, personas):
+    con_cuentas_de_chatwoot(fabrica)
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_ANA), MENSAJES))
+    guardar_conversaciones(
+        fabrica, (conversacion("6", None, inicio=DIA_SIGUIENTE), UN_MENSAJE)
+    )
+    respondida = UN_MENSAJE + [saliente(2, 8)]
+    guardar_conversaciones(fabrica, (conversacion("6", None, inicio=DIA_SIGUIENTE), respondida))
+    abandonada = conversacion_de(fabrica, "6")
+    assert (abandonada.continua_de_id, abandonada.persona_id) == (None, personas["juan"])
