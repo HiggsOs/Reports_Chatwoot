@@ -14,7 +14,9 @@ from panel.fuentes.cuentas import CuentaExterna
 from panel.fuentes.interacciones import ConversacionExterna, LlamadaExterna
 from panel.servicios.interacciones import (
     MOTIVO_MANUAL,
+    MOTIVO_POR_MENSAJES,
     MOTIVO_SIN_USUARIO,
+    MOTIVO_SIN_USUARIO_NI_MENSAJES,
     ServicioInteracciones,
 )
 
@@ -253,9 +255,100 @@ def test_la_conversacion_se_asigna_al_usuario_por_su_correo(fabrica, personas):
         assert guardada.etiquetas == ["venta"]
 
 
-def test_conversacion_sin_usuario_queda_sin_asignar(fabrica, personas):
-    guardar_conversaciones(fabrica, (conversacion("5", None), []))
+def test_conversacion_sin_usuario_ni_mensajes_de_asesores_queda_sin_asignar(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", None), MENSAJES))
+    assert persona_de(fabrica, Conversacion, "5") == (
+        None,
+        "automatica",
+        MOTIVO_SIN_USUARIO_NI_MENSAJES,
+    )
+
+
+def test_conversacion_sin_usuario_ni_mensajes_guardados_queda_sin_asignar(fabrica, personas):
+    guardar_conversaciones(fabrica, (conversacion("5", None), None))
     assert persona_de(fabrica, Conversacion, "5") == (None, "automatica", MOTIVO_SIN_USUARIO)
+
+
+USUARIO_JUAN = CuentaExterna(id_externo="8", nombre="Juan", correo="juan@e.com")
+
+
+def saliente(id_mensaje, usuario_id, **extra):
+    return {
+        "id": id_mensaje,
+        "message_type": 1,
+        "content": "Respuesta",
+        "created_at": 1793700000 + id_mensaje,
+        "sender_type": "User",
+        "sender_id": usuario_id,
+        "sender": {"id": usuario_id, "name": f"Usuario {usuario_id}", "type": "user"},
+        **extra,
+    }
+
+
+def chat_de_ana_y_juan():
+    """Ana envía dos mensajes y Juan uno; una nota privada de Juan no cuenta."""
+    return [
+        {"id": 1, "message_type": 0, "content": "Hola", "created_at": 1793700000},
+        saliente(2, 8),
+        saliente(3, 9),
+        saliente(4, 9),
+        saliente(5, 8, private=True),
+        saliente(6, 8, private=True),
+    ]
+
+
+def con_cuentas_de_chatwoot(fabrica):
+    """Las cuentas de Ana y Juan, con su regla por correo, como las deja
+    «Actualizar cuentas»."""
+    guardar_conversaciones(
+        fabrica, (conversacion("1", USUARIO_ANA), []), (conversacion("2", USUARIO_JUAN), [])
+    )
+
+
+def test_sin_usuario_se_asigna_al_asesor_que_mas_mensajes_envio(fabrica, personas):
+    con_cuentas_de_chatwoot(fabrica)
+    resumen = guardar_conversaciones(fabrica, (conversacion("5", None), chat_de_ana_y_juan()))
+    persona, origen, motivo = persona_de(fabrica, Conversacion, "5")
+    assert (persona, origen) == (personas["ana"], "automatica")
+    assert motivo == f"{MOTIVO_POR_MENSAJES} · Cuenta de una sola persona"
+    assert resumen.sin_asignar == 0
+    with unidad_de_trabajo(fabrica) as sesion:
+        guardada = sesion.scalar(select(Conversacion).where(Conversacion.id_externo == "5"))
+        assert guardada.cuenta.id_externo == "9"
+        assert guardada.cuenta_por_mensajes
+
+
+def test_sin_usuario_usa_los_mensajes_ya_guardados(fabrica, personas):
+    con_cuentas_de_chatwoot(fabrica)
+    guardar_conversaciones(fabrica, (conversacion("5", None), chat_de_ana_y_juan()))
+    guardar_conversaciones(fabrica, (conversacion("5", None), None))
+    assert persona_de(fabrica, Conversacion, "5")[0] == personas["ana"]
+
+
+def test_cuando_chatwoot_asigna_usuario_manda_el_usuario(fabrica, personas):
+    con_cuentas_de_chatwoot(fabrica)
+    guardar_conversaciones(fabrica, (conversacion("5", None), chat_de_ana_y_juan()))
+    guardar_conversaciones(fabrica, (conversacion("5", USUARIO_JUAN), None))
+    persona, _, motivo = persona_de(fabrica, Conversacion, "5")
+    assert (persona, motivo) == (personas["juan"], "Cuenta de una sola persona")
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert not sesion.scalar(
+            select(Conversacion.cuenta_por_mensajes).where(Conversacion.id_externo == "5")
+        )
+
+
+def test_la_asignacion_por_mensajes_no_pisa_la_manual(fabrica, personas):
+    con_cuentas_de_chatwoot(fabrica)
+    guardar_conversaciones(fabrica, (conversacion("5", None), MENSAJES))
+    with unidad_de_trabajo(fabrica) as sesion:
+        conversacion_id = sesion.scalar(
+            select(Conversacion.id).where(Conversacion.id_externo == "5")
+        )
+        ServicioInteracciones(sesion).asignar_manual(
+            "conversacion", conversacion_id, personas["juan"]
+        )
+    guardar_conversaciones(fabrica, (conversacion("5", None), chat_de_ana_y_juan()))
+    assert persona_de(fabrica, Conversacion, "5")[:2] == (personas["juan"], ASIGNACION_MANUAL)
 
 
 def test_sin_mensajes_conserva_direccion_y_cierre(fabrica, personas):

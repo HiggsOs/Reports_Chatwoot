@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from panel.fuentes.interacciones import (
+    asesor_con_mas_mensajes,
     FuenteChatwoot,
     FuenteCloudTalk,
     conversacion_de_chatwoot,
@@ -123,3 +124,41 @@ def test_la_fuente_de_chatwoot_pide_las_bandejas_una_vez():
     fuente.conversaciones(None, None)
     assert cliente.bandejas_pedidas == 1
     assert fuente.mensajes("512") == [{"id": 1, "conversacion": 512}]
+
+
+def _saliente(usuario_id, creado, **extra):
+    return {
+        "message_type": 1,
+        "created_at": creado,
+        "sender_type": "User",
+        "sender_id": usuario_id,
+        "sender": {"id": usuario_id, "available_name": f"Asesor {usuario_id}", "type": "user"},
+        **extra,
+    }
+
+
+def test_asesor_con_mas_mensajes():
+    mensajes = [
+        {"message_type": 0, "created_at": 1, "sender_type": "Contact", "sender_id": 50},
+        _saliente(7, 2),
+        _saliente(8, 3),
+        _saliente(8, 4),
+        _saliente(7, 5, private=True),  # nota privada
+        {"message_type": 1, "created_at": 6, "sender_type": "AgentBot", "sender_id": 1},
+        {"message_type": 1, "created_at": 7, "sender": None},  # automatización
+        {"message_type": 2, "created_at": 8, "content": "Conversation was marked resolved"},
+    ]
+    asesor = asesor_con_mas_mensajes(mensajes)
+    assert asesor.cuenta.id_externo == "8"
+    assert asesor.cuenta.nombre == "Asesor 8"
+    assert (asesor.mensajes, asesor.total) == (2, 3)
+
+
+def test_asesor_con_mas_mensajes_desempata_por_el_ultimo_que_escribio():
+    mensajes = [_saliente(7, 1), _saliente(8, 2), _saliente(8, 3), _saliente(7, 4)]
+    assert asesor_con_mas_mensajes(mensajes).cuenta.id_externo == "7"
+
+
+def test_asesor_con_mas_mensajes_sin_asesores():
+    assert asesor_con_mas_mensajes([]) is None
+    assert asesor_con_mas_mensajes([{"message_type": 0, "sender_type": "Contact"}]) is None

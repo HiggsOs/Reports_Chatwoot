@@ -20,12 +20,20 @@ from panel.db.modelos import (
     Llamada,
 )
 from panel.db.repositorios.personas import RepositorioPersonas
-from panel.fuentes.interacciones import ConversacionExterna, LlamadaExterna
+from panel.fuentes.interacciones import (
+    ConversacionExterna,
+    LlamadaExterna,
+    asesor_con_mas_mensajes,
+)
 from panel.servicios.cuentas import ServicioCuentas
 from panel.telefonos import normalizar
 from reporte import INDETERMINADO, detectar_cierre, detectar_direccion
 
 MOTIVO_SIN_USUARIO = "La conversación no tiene usuario asignado en Chatwoot"
+MOTIVO_SIN_USUARIO_NI_MENSAJES = (
+    "La conversación no tiene usuario asignado en Chatwoot ni mensajes de asesores"
+)
+MOTIVO_POR_MENSAJES = "Sin usuario en Chatwoot: el asesor que más mensajes envió"
 MOTIVO_MANUAL = "Asignada a mano"
 SIN_ASIGNAR = "Sin asignar"
 
@@ -118,10 +126,13 @@ class ServicioInteracciones:
                     direccion=INDETERMINADO,
                     cierre_aproximado=False,
                 )
-            cuenta = (
-                self._cuentas.asegurar("chatwoot", externa.usuario) if externa.usuario else None
-            )
-            conversacion.cuenta_id = cuenta.id if cuenta else None
+            if mensajes is not None:
+                conversacion.mensajes = mensajes
+                conversacion.direccion = detectar_direccion(mensajes)
+                cierre, aproximado = detectar_cierre(externa.datos_origen, mensajes)
+                conversacion.cierre = cierre
+                conversacion.cierre_aproximado = aproximado
+            self._asignar_cuenta(conversacion, externa)
             conversacion.inicio = externa.inicio
             conversacion.ultima_actividad = externa.ultima_actividad
             conversacion.canal = externa.canal
@@ -131,12 +142,6 @@ class ServicioInteracciones:
             conversacion.cliente_id = self._cliente(
                 externa.telefono_cliente, externa.nombre_cliente
             )
-            if mensajes is not None:
-                conversacion.mensajes = mensajes
-                conversacion.direccion = detectar_direccion(mensajes)
-                cierre, aproximado = detectar_cierre(externa.datos_origen, mensajes)
-                conversacion.cierre = cierre
-                conversacion.cierre_aproximado = aproximado
             self._asignar_automatica(conversacion)
             if nueva:
                 self._sesion.add(conversacion)
@@ -145,6 +150,22 @@ class ServicioInteracciones:
             resumen.sin_asignar += conversacion.persona_id is None
         self._sesion.flush()
         return resumen
+
+    def _asignar_cuenta(self, conversacion: Conversacion, externa: ConversacionExterna) -> None:
+        """La cuenta es el usuario asignado en Chatwoot. Sin él, la del asesor
+        que más mensajes envió (con los mensajes guardados si no llegaron
+        nuevos); si ningún asesor escribió, ninguna."""
+        if externa.usuario is not None:
+            conversacion.cuenta_id = self._cuentas.asegurar("chatwoot", externa.usuario).id
+            conversacion.cuenta_por_mensajes = False
+            return
+        asesor = asesor_con_mas_mensajes(conversacion.mensajes or [])
+        if asesor is None:
+            conversacion.cuenta_id = None
+            conversacion.cuenta_por_mensajes = False
+            return
+        conversacion.cuenta_id = self._cuentas.asegurar("chatwoot", asesor.cuenta).id
+        conversacion.cuenta_por_mensajes = True
 
     def _existentes(self, modelo, ids_externos: list[str]) -> dict:
         if not ids_externos:
@@ -178,8 +199,14 @@ class ServicioInteracciones:
 
     def _resolver(self, interaccion) -> AsignacionResuelta:
         if interaccion.cuenta_id is None:
-            return AsignacionResuelta(persona_id=None, motivo=MOTIVO_SIN_USUARIO, regla_id=None)
-        return self.asignacion.resolver(interaccion.cuenta_id, interaccion.inicio)
+            motivo = MOTIVO_SIN_USUARIO
+            if isinstance(interaccion, Conversacion) and interaccion.mensajes is not None:
+                motivo = MOTIVO_SIN_USUARIO_NI_MENSAJES
+            return AsignacionResuelta(persona_id=None, motivo=motivo, regla_id=None)
+        resuelta = self.asignacion.resolver(interaccion.cuenta_id, interaccion.inicio)
+        if getattr(interaccion, "cuenta_por_mensajes", False):
+            resuelta.motivo = f"{MOTIVO_POR_MENSAJES} · {resuelta.motivo}"
+        return resuelta
 
     def _asignar_automatica(self, interaccion) -> bool:
         """Recalcula la asignación salvo que sea manual. Dice si cambió la persona."""

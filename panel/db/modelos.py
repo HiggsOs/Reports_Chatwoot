@@ -245,14 +245,19 @@ class Llamada(Asignable, MarcasDeTiempo, Base):
 
 
 class Conversacion(Asignable, MarcasDeTiempo, Base):
-    """Una conversación de Chatwoot. La cuenta es el usuario asignado; sin
-    usuario asignado queda sin cuenta y sin asignar."""
+    """Una conversación de Chatwoot. La cuenta es el usuario asignado. Sin
+    usuario asignado, es la del asesor que más mensajes envió en ella
+    (`cuenta_por_mensajes`); si ningún asesor escribió, queda sin cuenta y sin
+    asignar."""
 
     __tablename__ = "conversaciones"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     id_externo: Mapped[str] = mapped_column(String(64), unique=True)
     cuenta_id: Mapped[int | None] = mapped_column(ForeignKey("cuentas.id", ondelete="RESTRICT"))
+    # Chatwoot no tiene usuario asignado: la cuenta es la del asesor que más
+    # mensajes envió.
+    cuenta_por_mensajes: Mapped[bool] = mapped_column(default=False, server_default=false())
     inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ultima_actividad: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     canal: Mapped[str] = mapped_column(String(200))  # nombre de la bandeja
