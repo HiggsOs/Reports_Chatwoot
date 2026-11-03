@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from chatwoot import ClienteChatwoot
 from cloudtalk import ClienteCloudTalk, a_fecha_utc, fue_grabada
 from panel.fuentes.cuentas import CuentaExterna
-from reporte import a_fecha_local, resolver_canal
+from reporte import TIPO_SALIENTE, a_fecha_local, resolver_canal
 from reporte_cloudtalk import nombre_agente
 
 DIRECCIONES_CLOUDTALK = {"incoming": "entrante", "outgoing": "saliente", "internal": "interna"}
@@ -48,6 +48,64 @@ class ConversacionExterna(BaseModel):
     telefono_cliente: str | None
     nombre_cliente: str | None
     datos_origen: dict[str, Any]
+
+
+class AsesorDeMensajes(BaseModel):
+    """El asesor que más mensajes envió en una conversación."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cuenta: CuentaExterna
+    mensajes: int  # los que envió él
+    total: int  # los que enviaron todos los asesores
+
+
+def asesor_con_mas_mensajes(mensajes: list[dict]) -> AsesorDeMensajes | None:
+    """El usuario de Chatwoot que más mensajes envió al cliente.
+
+    Cuentan los mensajes salientes (`message_type` 1) de un usuario: no las
+    notas privadas, ni los de bots o automatizaciones, ni las actividades. Si
+    dos empatan, gana el que escribió último. None si ningún asesor escribió.
+    """
+    conteo: dict[str, int] = {}
+    ultimo: dict[str, tuple[float, int]] = {}
+    remitentes: dict[str, dict] = {}
+    for orden, msg in enumerate(mensajes):
+        if msg.get("message_type") != TIPO_SALIENTE or msg.get("private"):
+            continue
+        remitente = msg.get("sender") or {}
+        tipo = (msg.get("sender_type") or remitente.get("type") or "").lower()
+        id_remitente = msg.get("sender_id") or remitente.get("id")
+        if tipo != "user" or id_remitente in (None, ""):
+            continue
+        clave = str(id_remitente)
+        conteo[clave] = conteo.get(clave, 0) + 1
+        ultimo[clave] = max(ultimo.get(clave, (0.0, -1)), (_numero(msg.get("created_at")), orden))
+        if remitente:
+            remitentes[clave] = remitente
+    if not conteo:
+        return None
+
+    elegido = max(conteo, key=lambda clave: (conteo[clave], ultimo[clave]))
+    remitente = remitentes.get(elegido, {})
+    correo = (remitente.get("email") or "").strip()
+    nombre = (remitente.get("available_name") or remitente.get("name") or "").strip()
+    return AsesorDeMensajes(
+        cuenta=CuentaExterna(
+            id_externo=elegido,
+            nombre=nombre or correo or f"Usuario {elegido}",
+            correo=correo,
+        ),
+        mensajes=conteo[elegido],
+        total=sum(conteo.values()),
+    )
+
+
+def _numero(valor) -> float:
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class FuenteLlamadas(Protocol):

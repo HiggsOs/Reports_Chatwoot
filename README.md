@@ -255,6 +255,14 @@ horario de verano; inicio incluido y fin excluido.
 - *Ver vista previa* dice, sin guardar nada, cuántas interacciones del período
   quedarían para cada asesor y cuántas cambiarían. Al guardar, se reasignan las
   interacciones de la cuenta desde la fecha de la regla.
+- Una **conversación sin usuario asignado en Chatwoot** se asigna al asesor que
+  más mensajes envió en ella: cuentan los mensajes salientes de usuarios de
+  Chatwoot, no las notas privadas ni los de bots o automatizaciones; si dos
+  empatan, gana el que escribió último. Su cuenta queda como la de ese usuario
+  y se aplica la regla de esa cuenta, así que un cambio de regla también la
+  reasigna. El motivo empieza por «Sin usuario en Chatwoot: el asesor que más
+  mensajes envió». Si después Chatwoot le asigna un usuario, manda ese
+  usuario. Si ningún asesor escribió, queda en *Sin asignar*.
 - Una interacción asignada a mano (en *Sin asignar* o en el detalle de
   *Llamadas* y *Conversaciones*) no la cambian ni la sincronización ni las
   reglas nuevas, hasta que se vuelve a la asignación automática.
