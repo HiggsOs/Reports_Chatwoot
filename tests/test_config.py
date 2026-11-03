@@ -42,10 +42,18 @@ def test_data_dir_tiene_valor_por_defecto():
 
 
 def test_falta_una_variable():
-    entorno = {k: v for k, v in ENTORNO_VALIDO.items() if k != "CHATWOOT_API_TOKEN"}
+    entorno = {k: v for k, v in ENTORNO_VALIDO.items() if k != "DATABASE_URL"}
     with pytest.raises(ConfigError) as error:
         cargar_config(entorno)
-    assert "CHATWOOT_API_TOKEN" in str(error.value)
+    assert "DATABASE_URL" in str(error.value)
+
+
+def test_chatwoot_es_opcional():
+    sin_chatwoot = {k: v for k, v in ENTORNO_VALIDO.items() if not k.startswith("CHATWOOT_")}
+    cfg = cargar_config(sin_chatwoot)
+    assert not cfg.chatwoot_configurado
+    assert cfg.base_url == "" and cfg.account_id == 0
+    assert cargar_config(ENTORNO_VALIDO).chatwoot_configurado
 
 
 def test_variable_vacia_cuenta_como_faltante():
@@ -58,8 +66,8 @@ def test_reporta_todas_las_variables_faltantes_juntas():
     with pytest.raises(ConfigError) as error:
         cargar_config({"CHATWOOT_BASE_URL": "https://x.com"})
     mensaje = str(error.value)
-    assert "CHATWOOT_ACCOUNT_ID" in mensaje
     assert "APP_USERNAME" in mensaje
+    assert "DATABASE_URL" in mensaje
 
 
 def test_account_id_no_numerico():
@@ -174,3 +182,50 @@ def test_la_sincronizacion_rechaza_valores_no_positivos(valor):
     with pytest.raises(ConfigError) as error:
         cargar_config({**ENTORNO_VALIDO, "SYNC_INTERVALO_MINUTOS": valor})
     assert "SYNC_INTERVALO_MINUTOS" in str(error.value)
+
+
+def test_modelos_de_transcripcion_con_precio():
+    modelos = (
+        '[{"proveedor": "openai", "modelo": "whisper-1", "precio_minuto": "0.006",'
+        ' "redondeo": "minuto"}, {"proveedor": "openai", "modelo": "gpt-4o-transcribe",'
+        ' "activo": false}]'
+    )
+    cfg = cargar_config({**ENTORNO_VALIDO, "TRANSCRIPCION_MODELOS": modelos})
+    primero, segundo = cfg.transcripcion_modelos
+    assert primero.clave == "openai:whisper-1"
+    assert str(primero.precio_minuto) == "0.006" and primero.redondeo == "minuto"
+    assert segundo.precio_minuto is None and not segundo.activo
+
+
+@pytest.mark.parametrize(
+    "modelos",
+    [
+        "no es json",
+        '[{"proveedor": "openai"}]',
+        '[{"proveedor": "openai", "modelo": "a"}, {"proveedor": "openai", "modelo": "a"}]',
+    ],
+)
+def test_modelos_invalidos(modelos):
+    with pytest.raises(ConfigError) as error:
+        cargar_config({**ENTORNO_VALIDO, "TRANSCRIPCION_MODELOS": modelos})
+    assert "TRANSCRIPCION_MODELOS" in str(error.value)
+
+
+def test_limites_de_gasto():
+    cfg = cargar_config(
+        {
+            **ENTORNO_VALIDO,
+            "TRANSCRIPCION_TOPE_MENSUAL_USD": "60,5",
+            "TRANSCRIPCION_CONFIRMAR_LOTE_USD": "0",
+            "TRANSCRIPCION_AUTO_MIN_SEGUNDOS": "30",
+        }
+    )
+    assert str(cfg.transcripcion_tope_mensual_usd) == "60.5"
+    assert cfg.transcripcion_confirmar_lote_usd is None
+    assert cfg.transcripcion_auto_min_segundos == 30
+    assert cfg.transcripcion_aviso_porcentaje == 80
+
+
+def test_tope_negativo():
+    with pytest.raises(ConfigError):
+        cargar_config({**ENTORNO_VALIDO, "TRANSCRIPCION_TOPE_MENSUAL_USD": "-1"})

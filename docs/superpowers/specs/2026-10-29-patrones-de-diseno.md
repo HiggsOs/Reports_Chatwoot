@@ -96,6 +96,8 @@ lo demás.
 | Cálculo de la nota | **Strategy** | — |
 | Exportación de reportes | **Strategy** (un exportador por formato) | — |
 | Avance y avisos de procesos largos | **Observer** (callbacks) | — |
+| Ajustes cargados desde el panel | **Overlay** sobre el entorno | Repository, cifrado |
+| Interfaz (Streamlit) | **Registro de páginas** + inyección por nombre | Contenedor / presentación, Strategy (Vista), Form Object, Flash message |
 
 Las secciones siguientes explican cada una.
 
@@ -326,7 +328,75 @@ reporte es uno solo; cada exportador solo decide cómo se escribe.
 «espero 60 s por el límite» sin saber si quien escucha es una barra de
 Streamlit, un log de `sync` o una prueba.
 
-## 15. Dónde no se usan patrones
+## 15. Interfaz (Streamlit)
+
+### 15.1 Capas
+
+```
+app.py                      raíz de composición: config, servicios, login
+ui/navegacion.py            registro de páginas (sección, título, ruta, icono)
+ui/paginas/                 una pantalla por módulo: compone, no calcula
+ui/componentes/             piezas reutilizables: reciben datos, devuelven acciones
+ui/estado.py                claves de st.session_state compartidas
+.streamlit/config.toml      tema (paleta y fuente)
+```
+
+Reglas:
+
+- **Las páginas no hablan con la base ni con APIs por su cuenta.** Usan los
+  servicios y consultas de `panel/` (Repository, servicios) que reciben por
+  parámetro. Un `select()` dentro de `ui/` es un error de diseño.
+- **Los componentes no conocen la página que los usa.** Reciben modelos
+  Pydantic o valores simples y devuelven lo que eligió el usuario (o llaman a
+  un servicio que también reciben). Ejemplos: `franja_asesor`, `reproductor`,
+  `chat.mostrar`, `transcripcion.panel`, `editor_asignacion`.
+- **Ningún componente lee `st.session_state` ajeno.** Sus claves llevan su
+  prefijo; las que comparten páginas (el cliente elegido para Historial) están
+  en `ui/estado.py`.
+
+### 15.2 Patrones
+
+- **Registro de páginas e inyección por nombre** (`ui/navegacion.py`): cada
+  pantalla es una `EntradaPagina`. `armar()` mira la firma de la función y le
+  pasa solo lo que pide (`fabrica`, `cfg`, `audio`, `transcripcion`,
+  `paginas`…). Agregar una pantalla = escribir su módulo y sumar una entrada;
+  `app.py` no cambia. Si una página pide algo que no existe, falla al
+  arrancar con `DependenciaFaltante`, no en medio del uso.
+- **Contenedor / presentación**: la página (contenedor) lee los datos y decide
+  qué mostrar; el componente (presentación) dibuja. Así el mismo detalle de
+  llamada sirve en Llamadas y en Historial del cliente.
+- **Strategy para variantes de una pantalla**: Llamadas y Conversaciones son
+  la misma página con otra `Vista` (qué listar, qué columnas, qué enlace, qué
+  mostrar en el detalle). Los formularios de cada estrategia de asignación se
+  registran por nombre (`componentes/formularios_asignacion.py`).
+- **Form Object** (`componentes/ajustes.py`, `FormularioAjustes`): lee el valor
+  vigente y de dónde sale (panel o entorno), pide claves sin mostrarlas y
+  guarda solo si la configuración resultante es válida. Lo usan General y la
+  configuración de Transcripción.
+- **Flash message** (`componentes/avisos.py`): una acción deja su aviso y hace
+  `st.rerun()`; la página lo muestra una vez arriba. Todas las confirmaciones
+  se ven igual.
+- **Tokens de diseño** (`componentes/estilo.py`): colores por estado, iconos
+  Material por acción y formato de números en español en un solo lugar. Las
+  pantallas usan `insignia("Manual", "manual")`, nunca un color suelto.
+
+### 15.3 Pruebas
+
+`tests/test_paginas.py` dibuja cada página registrada con `AppTest` contra una
+base real, vacía y con datos, y el detalle de llamadas y conversaciones. Una
+página nueva entra sola en esa prueba al sumarse al registro.
+
+## 16. Ajustes cargados desde el panel
+
+Las conexiones (CloudTalk, Chatwoot, SFTP) y la transcripción (claves, modelos
+con precio, límites) se cargan en las pantallas General y Transcripción. Se
+guardan en la tabla `ajustes` con el **mismo nombre que su variable de
+entorno** y se superponen al entorno (`panel/ajustes.py`): la configuración
+sigue siendo un único `Config` validado, y quien no use el panel sigue con las
+variables de siempre. Las claves se cifran con Fernet. La app recarga sus
+servicios al guardar; la sincronización relee los ajustes en cada ciclo.
+
+## 17. Dónde no se usan patrones
 
 Sumar abstracciones donde no hay variación hace el código más difícil de
 leer. Estas partes quedan como funciones simples hasta que aparezca una
@@ -341,7 +411,7 @@ segunda forma real de hacerlas:
 La regla para decidir: **se abstrae cuando hay o se espera con certeza una
 segunda implementación**, no por las dudas.
 
-## 16. Cómo se ve agregar algo nuevo (ejemplos)
+## 18. Cómo se ve agregar algo nuevo (ejemplos)
 
 | Cambio | Qué se agrega | Qué no se toca |
 |---|---|---|

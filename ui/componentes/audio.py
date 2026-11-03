@@ -35,7 +35,10 @@ def reproductor(audio: ServicioAudio | None, llamada_id: int, retencion_dias: in
                     f"Al escucharla, el audio queda guardado {retencion_dias} días desde "
                     "la fecha de la llamada."
                 )
-            if not st.button("▶ Escuchar la llamada", key=f"escuchar-{llamada_id}"):
+            if not st.button(
+                "Escuchar la llamada", key=f"escuchar-{llamada_id}", type="primary",
+                icon=":material/play_arrow:",
+            ):
                 return
         lugar.empty()
         with st.spinner("Trayendo el audio de CloudTalk…"):

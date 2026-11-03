@@ -4,13 +4,14 @@ Cada etapa del plan suma sus tablas aquí y una migración de Alembic que las
 crea; nunca se edita una migración ya aplicada.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -380,4 +381,40 @@ class TrabajoTranscripcion(MarcasDeTiempo, Base):
             unique=True,
             postgresql_where=text("estado IN ('pendiente', 'en_proceso')"),
         ),
+    )
+
+
+class Ajuste(Base):
+    """Un valor de configuración cargado desde el panel (pantalla General y
+    Transcripción). Pisa a la variable de entorno del mismo nombre.
+
+    Las claves y contraseñas se guardan cifradas (`secreto`); el resto, tal cual.
+    """
+
+    __tablename__ = "ajustes"
+
+    clave: Mapped[str] = mapped_column(String(80), primary_key=True)
+    valor: Mapped[str] = mapped_column(Text)
+    secreto: Mapped[bool] = mapped_column(default=False, server_default=false())
+    actualizado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CobroTranscripcion(MarcasDeTiempo, Base):
+    """Lo que el proveedor cobró de verdad en un mes por un modelo, según su
+    factura o su panel de uso. Sirve para comparar con lo que estima el panel."""
+
+    __tablename__ = "cobros_transcripcion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mes: Mapped[date] = mapped_column(Date)  # siempre el día 1
+    proveedor: Mapped[str] = mapped_column(String(50))
+    modelo: Mapped[str] = mapped_column(String(100))
+    minutos: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    usd: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+
+    __table_args__ = (
+        UniqueConstraint("mes", "proveedor", "modelo", name="uq_cobros_transcripcion_mes_modelo"),
+        CheckConstraint("extract(day from mes) = 1", name="mes_desde_el_dia_uno"),
     )

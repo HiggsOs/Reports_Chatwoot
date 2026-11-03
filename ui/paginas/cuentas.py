@@ -23,7 +23,7 @@ from panel.db.repositorios.personas import RepositorioPersonas
 from panel.fuentes.cuentas import cuentas_de_chatwoot, cuentas_de_cloudtalk
 from panel.servicios.cuentas import ServicioCuentas
 from panel.servicios.interacciones import ResumenReasignacion, ServicioInteracciones
-from ui import formularios_asignacion
+from ui.componentes import formularios_asignacion
 
 NOMBRES_PLATAFORMA = {"cloudtalk": "CloudTalk", "chatwoot": "Chatwoot"}
 CLAVE_AVISO = "aviso_cuentas"
@@ -34,11 +34,11 @@ COLORES = ("#cfe3ff", "#ffe0b8", "#d4f0d0", "#f3d1f4", "#fff3b0", "#d9d9f7")
 
 def _actualizar_cuentas(fabrica: sessionmaker[Session], cfg: Config) -> None:
     mensajes, errores = [], []
-    fuentes = [
-        ("chatwoot", lambda: cuentas_de_chatwoot(
+    fuentes = []
+    if cfg.chatwoot_configurado:
+        fuentes.append(("chatwoot", lambda: cuentas_de_chatwoot(
             ClienteChatwoot(cfg.base_url, cfg.account_id, cfg.api_token).listar_agentes()
-        )),
-    ]
+        )))
     if cfg.cloudtalk_configurado:
         fuentes.insert(0, ("cloudtalk", lambda: cuentas_de_cloudtalk(
             ClienteCloudTalk(
@@ -66,8 +66,6 @@ def _actualizar_cuentas(fabrica: sessionmaker[Session], cfg: Config) -> None:
         st.success("\n\n".join(mensajes))
     for error in errores:
         st.error(error)
-    if not cfg.cloudtalk_configurado:
-        st.info("CloudTalk no está configurado: solo se actualizaron las cuentas de Chatwoot.")
 
 
 def _tabla_cuentas(sesion: Session) -> tuple[pd.DataFrame, dict[int, str]]:
@@ -258,7 +256,8 @@ def _describir_reasignacion(resumen: ResumenReasignacion) -> str:
     )
 
 
-def mostrar(fabrica: sessionmaker[Session], cfg: Config) -> None:
+def mostrar(fabrica: sessionmaker[Session], cfg: Config, paginas: dict | None = None) -> None:
+    """`paginas`: ruta → página, para ir a General si falta una conexión."""
     st.title("Cuentas")
     st.caption(
         "Cada cuenta de CloudTalk o de Chatwoot tiene una regla que dice qué asesor "
@@ -267,7 +266,13 @@ def mostrar(fabrica: sessionmaker[Session], cfg: Config) -> None:
     if aviso := st.session_state.pop(CLAVE_AVISO, None):
         st.success(aviso)
 
-    if st.button("Actualizar cuentas desde las plataformas"):
+    if not (cfg.cloudtalk_configurado and cfg.chatwoot_configurado) and paginas:
+        faltan = " y ".join(n for n, ok in (("CloudTalk", cfg.cloudtalk_configurado),
+                                            ("Chatwoot", cfg.chatwoot_configurado)) if not ok)
+        st.info(f"{faltan} no está conectado: sus cuentas no se pueden traer.")
+        st.page_link(paginas["general"], label="Configurar las conexiones en General",
+                     icon=":material/settings:")
+    if st.button("Actualizar cuentas desde las plataformas", icon=":material/sync:"):
         _actualizar_cuentas(fabrica, cfg)
 
     with unidad_de_trabajo(fabrica) as sesion:

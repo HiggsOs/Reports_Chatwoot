@@ -1,0 +1,13 @@
+# Tema del panel. Paleta: ink-black (primario), sky-reflection (fondos y
+# bordes), deep-lilac (manual), sand (sin asignar y avisos) y strawberry-red
+# (errores). El resto del estilo está en ui/estilo.py.
+[theme]
+base = "light"
+primaryColor = "#0B5A8E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#ECF4F9"
+textColor = "#0C1D27"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"

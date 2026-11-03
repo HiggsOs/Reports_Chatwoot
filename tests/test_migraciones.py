@@ -18,6 +18,8 @@ TABLAS = (
     "audios_pendientes",
     "transcripciones",
     "trabajos_transcripcion",
+    "ajustes",
+    "cobros_transcripcion",
 )
 
 

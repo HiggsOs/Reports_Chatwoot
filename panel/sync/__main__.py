@@ -12,7 +12,10 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 
-from config import ConfigError, cargar_config
+from sqlalchemy.exc import SQLAlchemyError
+
+from config import Config, ConfigError, cargar_config
+from panel.ajustes import entorno_efectivo
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
 from panel.composicion import sincronizadores
 from panel.db.base import crear_fabrica_sesiones, crear_motor
@@ -54,11 +57,32 @@ def main(argumentos: list[str] | None = None) -> int:
     hasta = _inicio_del_dia(opciones.hasta) + timedelta(days=1) if opciones.hasta else None
 
     while True:
+        # En cada ciclo: los ajustes cargados en el panel valen sin reiniciar.
+        cfg = config_del_ciclo(cfg, fabrica)
         resultados = ejecutar_ciclo(fabrica, sincronizadores(fabrica, cfg), desde, hasta)
         hubo_error = any(r.error for r in resultados or [])
         if opciones.una_vez or desde is not None:
             return 1 if hubo_error else 0
         time.sleep(cfg.sync_intervalo_minutos * 60)
+
+
+def config_del_ciclo(base: Config, fabrica, entorno=None) -> Config:
+    """El entorno con los ajustes del panel encima. Si los ajustes no se pueden
+    leer o no son válidos, se sigue con lo del entorno y queda en el log."""
+    entorno = dict(os.environ if entorno is None else entorno)
+    try:
+        efectivo, lectura = entorno_efectivo(entorno, fabrica)
+        if lectura.ilegibles:
+            registro.warning(
+                "Ajustes cifrados con otra llave, cárguelos de nuevo en el panel: %s",
+                ", ".join(lectura.ilegibles),
+            )
+        return cargar_config(efectivo)
+    except ConfigError as error:
+        registro.error("Los ajustes del panel no son válidos (%s); se usa el entorno.", error)
+    except SQLAlchemyError:
+        registro.exception("No se pudieron leer los ajustes del panel; se usa el entorno.")
+    return base
 
 
 if __name__ == "__main__":

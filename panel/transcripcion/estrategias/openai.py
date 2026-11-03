@@ -14,6 +14,7 @@ OpenAI anunció el apagado de todos los modelos salvo `gpt-transcribe` para el
 pedir sin tocar el código.
 """
 
+import math
 import time
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
@@ -61,10 +62,28 @@ def _decimal(texto: str | None) -> Decimal | None:
         ) from error
 
 
+def _capacidades(formato: str) -> Capacidades:
+    return Capacidades(
+        diarizacion=formato == DIARIZADO,
+        marcas_de_tiempo=formato in (DIARIZADO, DETALLADO),
+        tamano_max_bytes=TAMANO_MAXIMO_BYTES,
+    )
+
+
 @registrar
 class EstrategiaOpenAI:
     nombre = "openai"
     titulo = "OpenAI"
+    # Para la pantalla Transcripción: dónde va la clave y qué variables eligen
+    # el modelo, el precio y el redondeo (ver registro.crear_modelo).
+    variable_clave = "OPENAI_API_KEY"
+    variables_modelo = ("OPENAI_MODELO_TRANSCRIPCION", "OPENAI_PRECIO_MINUTO", "OPENAI_REDONDEO")
+    modelos_conocidos = {
+        "gpt-4o-transcribe-diarize": _capacidades(DIARIZADO),
+        "whisper-1": _capacidades(DETALLADO),
+        "gpt-4o-transcribe": _capacidades(SIMPLE),
+        "gpt-4o-mini-transcribe": _capacidades(SIMPLE),
+    }
 
     def __init__(
         self,
@@ -74,6 +93,7 @@ class EstrategiaOpenAI:
         precio_minuto: Decimal | None = None,
         url: str = URL_POR_DEFECTO,
         sesion: requests.Session | None = None,
+        redondeo: str = "segundo",
     ) -> None:
         self._clave = clave
         self._modelo = modelo
@@ -83,6 +103,8 @@ class EstrategiaOpenAI:
                 f"OPENAI_FORMATO_RESPUESTA debe ser {DIARIZADO}, {DETALLADO} o {SIMPLE}."
             )
         self._precio = precio_minuto
+        # «minuto»: el proveedor cobra cada audio redondeado al minuto siguiente.
+        self._redondeo_minuto = redondeo == "minuto"
         self._url = url.rstrip("/")
         self._sesion = sesion or requests.Session()
 
@@ -97,7 +119,29 @@ class EstrategiaOpenAI:
             formato=(valores.get("OPENAI_FORMATO_RESPUESTA") or "").strip() or None,
             precio_minuto=_decimal(valores.get("OPENAI_PRECIO_MINUTO")),
             url=(valores.get("OPENAI_BASE_URL") or URL_POR_DEFECTO).strip(),
+            redondeo=(valores.get("OPENAI_REDONDEO") or "segundo").strip(),
         )
+
+    @classmethod
+    def probar_clave(cls, valores: Mapping[str, str]) -> str:
+        """Pide la lista de modelos: no transcribe nada ni cuesta."""
+        clave = (valores.get("OPENAI_API_KEY") or "").strip()
+        if not clave:
+            raise TranscripcionNoDisponible("Falta la clave de OpenAI.")
+        url = (valores.get("OPENAI_BASE_URL") or URL_POR_DEFECTO).strip().rstrip("/")
+        try:
+            respuesta = requests.get(
+                f"{url}/models", headers={"Authorization": f"Bearer {clave}"}, timeout=20
+            )
+        except requests.RequestException as error:
+            raise TranscripcionError(f"No se pudo conectar con OpenAI: {error}") from error
+        if respuesta.status_code in (401, 403):
+            raise TranscripcionError("OpenAI rechazó la clave.")
+        if respuesta.status_code >= 400:
+            raise TranscripcionError(f"OpenAI respondió {respuesta.status_code}.")
+        modelos = {m.get("id") for m in respuesta.json().get("data", [])}
+        conocidos = sorted(m for m in cls.modelos_conocidos if m in modelos)
+        return "Clave válida. Modelos de transcripción disponibles: " + (", ".join(conocidos) or "ninguno conocido")
 
     @property
     def modelo(self) -> str:
@@ -105,16 +149,15 @@ class EstrategiaOpenAI:
 
     @property
     def capacidades(self) -> Capacidades:
-        return Capacidades(
-            diarizacion=self._formato == DIARIZADO,
-            marcas_de_tiempo=self._formato in (DIARIZADO, DETALLADO),
-            tamano_max_bytes=TAMANO_MAXIMO_BYTES,
-        )
+        return _capacidades(self._formato)
 
     def costo_estimado(self, duracion_s: float | None) -> Decimal | None:
         if self._precio is None or duracion_s is None:
             return None
-        return (self._precio * Decimal(str(duracion_s)) / 60).quantize(Decimal("0.0001"))
+        minutos = Decimal(str(duracion_s)) / 60
+        if self._redondeo_minuto:
+            minutos = Decimal(math.ceil(minutos))
+        return (self._precio * minutos).quantize(Decimal("0.0001"))
 
     # --- Petición ------------------------------------------------------------
 

@@ -9,16 +9,14 @@ from panel.db.base import unidad_de_trabajo
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.servicios import clientes
 from panel.servicios.clientes import SIN_ASIGNAR
-from ui import transcripcion as ui_transcripcion
-from ui.audio import reproductor
-from ui.interacciones import CLAVE_CLIENTE_ELEGIDO, cerrar_detalle, editor_asignacion, fila_elegida
+from ui import estado
+from ui.componentes import chat
+from ui.componentes import transcripcion as ui_transcripcion
+from ui.componentes.asignacion import cerrar_detalle, editor_asignacion, fila_elegida
+from ui.componentes.audio import reproductor
+from ui.componentes.estilo import ICONOS, franja_asesor
 
-TIPOS = {"llamada": "📞 Llamada", "conversacion": "💬 Chat"}
-# Lo que escribe el cliente no debe leerse como formato Markdown.
-_ESPECIALES_MARKDOWN = set("\\`*_{}[]()#+-.!|>~<$")
-# Rol del mensaje → (rol de Streamlit, ícono). El ícono por defecto del asesor
-# sería un robot, y es una persona.
-ROLES_CHAT = {"cliente": ("user", "🙂"), "asesor": ("assistant", "🎧")}
+TIPOS = {"llamada": "Llamada", "conversacion": "Chat"}
 
 
 def _cantidad(numero: int, singular: str, plural: str) -> str:
@@ -44,7 +42,7 @@ def mostrar(fabrica: sessionmaker[Session], cfg: Config, audio=None, transcripci
         "nombre. Se ven todas sus llamadas y chats, con el asesor que atendió cada uno."
     )
 
-    elegido_antes = st.session_state.pop(CLAVE_CLIENTE_ELEGIDO, None)
+    elegido_antes = st.session_state.pop(estado.CLIENTE_ELEGIDO, None)
     izquierda, derecha = st.columns([3, 1])
     texto = izquierda.text_input(
         "Buscar", placeholder="Teléfono o nombre", key="historial-busqueda"
@@ -135,56 +133,24 @@ def _linea_de_tiempo(
         st.caption("Elija una fila para ver la llamada o leer el chat.")
         return
 
-    st.subheader(f"{TIPOS[elemento.tipo]} del {elemento.inicio:%d/%m/%Y %H:%M}")
-    st.markdown(f"**Asesor:** {elemento.asesor or SIN_ASIGNAR} — {elemento.motivo}")
+    icono = ICONOS[elemento.tipo]
+    st.subheader(f"{icono} {TIPOS[elemento.tipo]} del {elemento.inicio:%d/%m/%Y %H:%M}")
+    franja_asesor(elemento.asesor, elemento.asignacion, elemento.motivo)
     if elemento.tipo == "llamada":
         if elemento.enlace_plataforma:
-            st.link_button("Abrir en CloudTalk", elemento.enlace_plataforma)
+            st.link_button("Abrir en CloudTalk", elemento.enlace_plataforma, icon=ICONOS["abrir"])
         reproductor(audio, elemento.id, cfg.audio_retencion_dias)
         ui_transcripcion.panel(transcripcion, elemento.id)
     else:
-        st.link_button(
-            "Abrir en Chatwoot",
-            f"{cfg.base_url}/app/accounts/{cfg.account_id}/conversations/{elemento.id_externo}",
-        )
-        _chat(fabrica, elemento.id)
+        if cfg.chatwoot_configurado:
+            st.link_button(
+                "Abrir en Chatwoot",
+                f"{cfg.base_url}/app/accounts/{cfg.account_id}/conversations/{elemento.id_externo}",
+                icon=ICONOS["abrir"],
+            )
+        chat.mostrar(fabrica, elemento.id)
 
     editor_asignacion(
         fabrica, elemento.tipo, elemento.id, elemento.persona_id, elemento.asignacion, personas
     )
     cerrar_detalle(clave)
-
-
-def _literal(texto: str) -> str:
-    return "".join(f"\\{c}" if c in _ESPECIALES_MARKDOWN else c for c in texto)
-
-
-def _chat(fabrica, conversacion_id: int) -> None:
-    with unidad_de_trabajo(fabrica) as sesion:
-        mensajes = clientes.mensajes_de_conversacion(sesion, conversacion_id)
-    if mensajes is None:
-        st.info(
-            "Los mensajes de este chat todavía no están guardados. Si es de los "
-            "últimos días, llegan en el próximo ciclo de sincronización; si es más "
-            "viejo, al cargar ese rango con «python -m panel.sync --desde». Mientras "
-            "tanto se puede leer en Chatwoot."
-        )
-        return
-    if not mensajes:
-        st.caption("El chat no tiene mensajes con texto.")
-        return
-    with st.container(height=500):
-        for mensaje in mensajes:
-            hora = f"{mensaje.fecha:%d/%m %H:%M}" if mensaje.fecha else ""
-            if mensaje.rol == "actividad":
-                st.caption(f"{hora} · {mensaje.texto}")
-            elif mensaje.rol == "nota":
-                st.info(
-                    f"**Nota interna de {_literal(mensaje.autor)}** · {hora}\n\n"
-                    + _literal(mensaje.texto)
-                )
-            else:
-                rol, icono = ROLES_CHAT[mensaje.rol]
-                with st.chat_message(rol, avatar=icono):
-                    st.markdown(f"**{_literal(mensaje.autor)}** · {hora}")
-                    st.markdown(_literal(mensaje.texto).replace("\n", "  \n"))

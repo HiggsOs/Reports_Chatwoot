@@ -7,7 +7,8 @@ Como los sincronizadores, anotan su resultado en `puntos_sincronizacion`
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import ClassVar
 
 from pydantic import BaseModel
@@ -18,7 +19,12 @@ from panel.audio.servicio import ServicioAudio
 from panel.db.base import unidad_de_trabajo
 from panel.db.modelos import PuntoSincronizacion
 from panel.sync.sincronizadores import ResultadoSincronizacion, ahora_utc
-from panel.transcripcion.servicio import ServicioTranscripcion, borrar_transcripciones_vencidas
+from panel.transcripcion import consultas as consultas_transcripcion
+from panel.transcripcion.servicio import (
+    ResumenCola,
+    ServicioTranscripcion,
+    borrar_transcripciones_vencidas,
+)
 
 registro = logging.getLogger(__name__)
 
@@ -102,17 +108,59 @@ class RetencionDeAudios(UnaVezPorDia):
 
 
 class ProcesarTranscripciones(Tarea):
-    """Transcribe hasta TRANSCRIPCION_POR_CICLO pedidos de la cola."""
+    """Transcribe hasta TRANSCRIPCION_POR_CICLO pedidos de la cola.
+
+    Con un tope mensual, no toma pedidos cuando lo estimado en el mes ya lo
+    alcanzó: la cola queda en pausa hasta el mes siguiente o hasta subir el tope.
+    """
 
     nombre = "transcripciones"
 
-    def __init__(self, fabrica, transcripcion: ServicioTranscripcion, limite: int, ahora=ahora_utc):
+    def __init__(
+        self,
+        fabrica,
+        transcripcion: ServicioTranscripcion,
+        limite: int,
+        tope_mensual: Decimal | None = None,
+        ahora=ahora_utc,
+    ):
         super().__init__(fabrica, ahora)
         self._transcripcion = transcripcion
         self._limite = limite
+        self._tope = tope_mensual
 
     def correr(self):
+        if self._tope is not None:
+            with unidad_de_trabajo(self._fabrica) as sesion:
+                gastado = consultas_transcripcion.gasto_del_mes(sesion, self._ahora())
+            if gastado >= self._tope:
+                registro.info("Cola de transcripción en pausa: %s de %s USD.", gastado, self._tope)
+                return ResumenCola(pausada_por_tope=True)
         return self._transcripcion.procesar_cola(self._limite)
+
+
+class ResumenEncolado(BaseModel):
+    encoladas: int = 0
+
+
+class EncolarLlamadasNuevas(Tarea):
+    """Pide transcribir las llamadas grabadas de los últimos días que duran al
+    menos TRANSCRIPCION_AUTO_MIN_SEGUNDOS. Nunca vuelve a pedir una que falló."""
+
+    nombre = "transcripcion_automatica"
+    VENTANA = timedelta(days=2)
+
+    def __init__(self, fabrica, transcripcion: ServicioTranscripcion, min_segundos: int, ahora=ahora_utc):
+        super().__init__(fabrica, ahora)
+        self._transcripcion = transcripcion
+        self._min_segundos = min_segundos
+
+    def correr(self):
+        with unidad_de_trabajo(self._fabrica) as sesion:
+            ids = consultas_transcripcion.llamadas_para_encolar(
+                sesion, self._ahora() - self.VENTANA, self._min_segundos
+            )
+        return ResumenEncolado(encoladas=self._transcripcion.encolar(ids) if ids else 0)
 
 
 class RetencionDeTranscripciones(UnaVezPorDia):

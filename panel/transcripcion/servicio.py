@@ -36,6 +36,7 @@ from panel.db.modelos import (
     TranscripcionGuardada,
 )
 from panel.transcripcion import preparacion
+from panel.transcripcion import registro as registro_transcripcion
 from panel.transcripcion.base import (
     EstrategiaTranscripcion,
     OpcionesTranscripcion,
@@ -79,6 +80,8 @@ class ResumenCola(BaseModel):
     hechos: int = 0
     reintentos: int = 0
     errores: int = 0
+    # Se llegó al tope de gasto del mes: no se tomó ningún pedido.
+    pausada_por_tope: bool = False
 
 
 class ResumenRetencionTranscripciones(BaseModel):
@@ -128,8 +131,12 @@ class ServicioTranscripcion:
     # --- Transcribir ---------------------------------------------------------
 
     def transcribir(self, llamada_id: int, proveedor: str | None = None) -> ResultadoTranscripcion:
-        cadena = [proveedor] if proveedor else self.cadena
-        cadena = [nombre for nombre in cadena if nombre in self.estrategias]
+        if proveedor:
+            # Un pedido viejo puede nombrar solo el proveedor («openai»).
+            elegido = registro_transcripcion.resolver(proveedor, self.estrategias)
+            cadena = [elegido] if elegido else []
+        else:
+            cadena = self.cadena
         if not cadena:
             return ResultadoTranscripcion(error="No hay un proveedor de transcripción configurado.")
 
@@ -313,7 +320,8 @@ class ServicioTranscripcion:
 
     def costo_de_lote(self, llamada_ids: list[int], proveedor: str | None = None) -> tuple[float, Decimal | None]:
         """Minutos de audio de esas llamadas y lo que costaría transcribirlas."""
-        nombre = proveedor or (self.cadena[0] if self.cadena else None)
+        nombre = registro_transcripcion.resolver(proveedor, self.estrategias) if proveedor else None
+        nombre = nombre or (self.cadena[0] if self.cadena else None)
         with unidad_de_trabajo(self._fabrica) as sesion:
             segundos = sesion.scalar(
                 select(func.coalesce(func.sum(Llamada.duracion_s), 0)).where(Llamada.id.in_(llamada_ids))
