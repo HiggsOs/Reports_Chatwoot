@@ -290,9 +290,32 @@ class ServicioTranscripcion:
             )
             return len(nuevos)
 
-    def procesar_cola(self, limite: int) -> ResumenCola:
-        """Toma hasta `limite` pedidos pendientes y los transcribe. Varios
-        procesos pueden correrla a la vez sin tomar el mismo pedido."""
+    def pedir(self, llamada_id: int, proveedor: str | None = None) -> int:
+        """Pone una llamada en la cola y devuelve el pedido. Si ya tenía uno
+        abierto, devuelve ese (con el modelo nuevo si todavía no empezó)."""
+        with unidad_de_trabajo(self._fabrica) as sesion:
+            abierto = sesion.scalar(
+                select(TrabajoTranscripcion)
+                .where(
+                    TrabajoTranscripcion.llamada_id == llamada_id,
+                    TrabajoTranscripcion.estado.in_([TRABAJO_PENDIENTE, TRABAJO_EN_PROCESO]),
+                )
+                .order_by(TrabajoTranscripcion.id.desc())
+                .limit(1)
+            )
+            if abierto is not None:
+                if abierto.estado == TRABAJO_PENDIENTE:
+                    abierto.proveedor = proveedor
+                return abierto.id
+            trabajo = TrabajoTranscripcion(llamada_id=llamada_id, proveedor=proveedor)
+            sesion.add(trabajo)
+            sesion.flush()
+            return trabajo.id
+
+    def procesar_cola(self, limite: int, trabajo_ids: list[int] | None = None) -> ResumenCola:
+        """Toma hasta `limite` pedidos pendientes y los transcribe (solo esos
+        `trabajo_ids`, si se dan). Varios procesos pueden correrla a la vez sin
+        tomar el mismo pedido."""
         with unidad_de_trabajo(self._fabrica) as sesion:
             # Pedidos de un proceso que se cortó a mitad: vuelven a la cola.
             sesion.execute(
@@ -303,10 +326,12 @@ class ServicioTranscripcion:
                 )
                 .values(estado=TRABAJO_PENDIENTE)
             )
+            consulta = select(TrabajoTranscripcion).where(TrabajoTranscripcion.estado == TRABAJO_PENDIENTE)
+            if trabajo_ids is not None:
+                consulta = consulta.where(TrabajoTranscripcion.id.in_(trabajo_ids))
             tomados = list(
                 sesion.scalars(
-                    select(TrabajoTranscripcion)
-                    .where(TrabajoTranscripcion.estado == TRABAJO_PENDIENTE)
+                    consulta
                     .order_by(TrabajoTranscripcion.creado_en)
                     .limit(limite)
                     .with_for_update(skip_locked=True)

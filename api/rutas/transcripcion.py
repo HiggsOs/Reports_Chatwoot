@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,7 @@ class TranscripcionesLlamada(BaseModel):
     configurada: bool
     versiones: list[VistaTranscripcion]
     opciones: list[OpcionModelo]
+    pedido: consultas.PedidoLlamada | None = None
 
 
 def _opciones(servicio: ServicioTranscripcion, llamada_ids: list[int]) -> list[OpcionModelo]:
@@ -68,12 +69,16 @@ def _opciones(servicio: ServicioTranscripcion, llamada_ids: list[int]) -> list[O
 
 
 @router.get("/llamadas/{llamada_id}/transcripciones", response_model=TranscripcionesLlamada)
-def de_llamada(llamada_id: int, c: Contenedor = Depends(contenedor)) -> TranscripcionesLlamada:
+def de_llamada(
+    llamada_id: int, c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)
+) -> TranscripcionesLlamada:
+    pedido = consultas.pedido_de_llamada(s, llamada_id)
     if c.transcripcion is None:
-        return TranscripcionesLlamada(configurada=False, versiones=[], opciones=[])
+        return TranscripcionesLlamada(configurada=False, versiones=[], opciones=[], pedido=pedido)
     servicio = c.transcripcion
     return TranscripcionesLlamada(
-        configurada=True, versiones=servicio.de_llamada(llamada_id), opciones=_opciones(servicio, [llamada_id])
+        configurada=True, versiones=servicio.de_llamada(llamada_id), opciones=_opciones(servicio, [llamada_id]),
+        pedido=pedido,
     )
 
 
@@ -81,13 +86,26 @@ class Pedido(BaseModel):
     proveedor: str | None = None
 
 
-@router.post("/llamadas/{llamada_id}/transcripciones", response_model=VistaTranscripcion)
-def transcribir(llamada_id: int, pedido: Pedido, c: Contenedor = Depends(contenedor)) -> VistaTranscripcion:
+def _procesar_pedido(servicio: ServicioTranscripcion, trabajo_id: int) -> None:
+    servicio.procesar_cola(1, trabajo_ids=[trabajo_id])
+
+
+@router.post("/llamadas/{llamada_id}/transcripciones", response_model=consultas.PedidoLlamada, status_code=202)
+def transcribir(
+    llamada_id: int, pedido: Pedido, tareas: BackgroundTasks,
+    c: Contenedor = Depends(contenedor), s: Session = Depends(sesion),
+) -> consultas.PedidoLlamada:
+    """Pone la llamada en la cola y la transcribe enseguida, en segundo plano.
+    Si falla, queda en la cola con su motivo y la sincronización la reintenta."""
     servicio = _servicio(c)
-    resultado = servicio.transcribir(llamada_id, pedido.proveedor)
-    if resultado.error:
-        raise HTTPException(502, resultado.error)
-    return next(v for v in servicio.de_llamada(llamada_id) if v.id == resultado.transcripcion_id)
+    llamada = s.get(Llamada, llamada_id)
+    if llamada is None:
+        raise HTTPException(404, "La llamada no existe.")
+    if not llamada.grabada:
+        raise HTTPException(409, "La llamada no se grabó.")
+    trabajo_id = servicio.pedir(llamada_id, pedido.proveedor)
+    tareas.add_task(_procesar_pedido, servicio, trabajo_id)
+    return consultas.pedido_de_llamada(s, llamada_id)
 
 
 @router.post("/transcripciones/{transcripcion_id}/principal", status_code=204)
@@ -171,6 +189,7 @@ class Resumen(BaseModel):
     intervalo_minutos: int
     auto_min_segundos: int
     errores: list[consultas.TrabajoConError]
+    abiertos: list[consultas.TrabajoEnCola]
     costo_reintento_usd: float | None
 
 
@@ -191,6 +210,7 @@ def resumen(c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)) -
         intervalo_minutos=cfg.sync_intervalo_minutos,
         auto_min_segundos=cfg.transcripcion_auto_min_segundos,
         errores=errores,
+        abiertos=consultas.trabajos_abiertos(s),
         costo_reintento_usd=float(costo) if costo is not None else None,
     )
 

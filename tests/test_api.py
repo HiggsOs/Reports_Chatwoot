@@ -351,3 +351,39 @@ def test_un_error_inesperado_llega_con_su_motivo(entorno, datos, tmp_path, monke
         respuesta = cliente.get("/api/inicio")
     assert respuesta.status_code == 500
     assert respuesta.json()["detail"] == "Error inesperado: ValueError: dato raro"
+
+
+def test_transcribir_pasa_por_la_cola_y_dice_por_que_fallo(entorno, datos, tmp_path, monkeypatch):
+    from api.contenedor import Contenedor as ClaseContenedor
+    from panel.transcripcion.base import OpcionesTranscripcion
+    from panel.transcripcion.estrategias.falsa import EstrategiaFalsa
+    from panel.transcripcion.servicio import ResultadoTranscripcion, ServicioTranscripcion
+
+    servicio = ServicioTranscripcion(datos, None, {"falsa": EstrategiaFalsa()}, ["falsa"],
+                                     OpcionesTranscripcion(idioma="es"))
+    pedidos = []
+
+    def transcribir(llamada_id, proveedor=None):
+        pedidos.append((llamada_id, proveedor))
+        return ResultadoTranscripcion(error="sin saldo")
+
+    monkeypatch.setattr(servicio, "transcribir", transcribir)
+    monkeypatch.setattr(ClaseContenedor, "transcripcion", property(lambda _self: servicio))
+    with TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web")) as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        llamada = cliente.get("/api/interacciones/llamada", params=_rango()).json()["filas"][0]
+
+        respuesta = cliente.post(f"/api/llamadas/{llamada['id']}/transcripciones", json={"proveedor": "falsa"},
+                                 headers=CABECERA)
+        assert respuesta.status_code == 202
+        # La cola lo procesó enseguida, en segundo plano.
+        assert pedidos == [(llamada["id"], "falsa")]
+
+        pedido = cliente.get(f"/api/llamadas/{llamada['id']}/transcripciones").json()["pedido"]
+        assert (pedido["estado"], pedido["intentos"], pedido["error"]) == ("pendiente", 1, "sin saldo")
+        abiertos = cliente.get("/api/transcripcion/resumen").json()["abiertos"]
+        assert [(a["llamada"], a["estado"], a["error"]) for a in abiertos] == [("900", "pendiente", "sin saldo")]
+
+        # Pedirla otra vez no duplica el pedido.
+        cliente.post(f"/api/llamadas/{llamada['id']}/transcripciones", json={}, headers=CABECERA)
+        assert len(cliente.get("/api/transcripcion/resumen").json()["abiertos"]) == 1

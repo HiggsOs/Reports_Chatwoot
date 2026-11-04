@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ErrorApi } from "../api/cliente";
-import type { Segmento, TranscripcionesLlamada, VersionTranscripcion } from "../api/tipos";
+import type { PedidoLlamada, Segmento, TranscripcionesLlamada, VersionTranscripcion } from "../api/tipos";
 import { Aviso, Boton, Cargando, ErrorCarga, Icono, Insignia } from "./basicos";
 import { Seleccion } from "./campos";
 import { useAvisos } from "./avisos";
@@ -123,6 +123,8 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
   const consulta = useQuery({
     queryKey: ["transcripciones", llamadaId],
     queryFn: () => api.get<TranscripcionesLlamada>(`/api/llamadas/${llamadaId}/transcripciones`),
+    // Mientras el pedido está en la cola, se consulta seguido para mostrar el resultado.
+    refetchInterval: (q) => (enCurso(q.state.data?.pedido) ? 3000 : false),
   });
   const [versionId, setVersionId] = useState<number | null>(null);
   const [modelo, setModelo] = useState<string>("");
@@ -136,10 +138,26 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
     cliente.invalidateQueries({ queryKey: ["interacciones"] });
   };
   const transcribir = useMutation({
-    mutationFn: () => api.post<VersionTranscripcion>(`/api/llamadas/${llamadaId}/transcripciones`, { proveedor: opcion?.clave }),
-    onSuccess: (v) => { setVersionId(v.id); refrescar(); avisar("Transcripción lista."); },
+    mutationFn: () => api.post<PedidoLlamada>(`/api/llamadas/${llamadaId}/transcripciones`, { proveedor: opcion?.clave }),
+    onSuccess: () => { refrescar(); cliente.invalidateQueries({ queryKey: ["transcripcion-resumen"] }); avisar("La llamada pasó a la cola de transcripción."); },
     onError: (e) => avisar((e as Error).message, "error"),
   });
+  // Cuando el pedido termina, se muestra la versión nueva y se avisa.
+  const pedido = datos?.pedido ?? null;
+  const estadoAnterior = useRef<string | null>(null);
+  useEffect(() => {
+    const antes = estadoAnterior.current;
+    estadoAnterior.current = pedido ? `${pedido.id}:${pedido.estado}:${pedido.intentos}` : null;
+    if (!antes || !pedido || !antes.startsWith(`${pedido.id}:`) || antes === estadoAnterior.current) return;
+    if (pedido.estado === "hecho") {
+      setVersionId(null);
+      cliente.invalidateQueries({ queryKey: ["interacciones"] });
+      avisar("Transcripción lista.");
+    } else if (pedido.error && !enCurso(pedido)) {
+      avisar(`La transcripción falló: ${pedido.error}`, "error");
+    }
+    cliente.invalidateQueries({ queryKey: ["transcripcion-resumen"] });
+  }, [pedido, cliente, avisar]);
   const principal = useMutation({
     mutationFn: (id: number) => api.post(`/api/transcripciones/${id}/principal`),
     onSuccess: () => { refrescar(); avisar("Ahora es la versión principal."); },
@@ -195,14 +213,17 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
         <span className="cap">Esta llamada todavía no tiene transcripción.</span>
       )}
 
+      {pedido && pedido.estado !== "hecho" && <EstadoPedido pedido={pedido} />}
+
       {datos.opciones.length > 0 && opcion && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: "1px solid var(--fondo)", paddingTop: 10 }}>
           <Seleccion etiqueta="Proveedor y modelo" valor={opcion.clave} alCambiar={setModelo}
             opciones={datos.opciones.map((o) => ({ valor: o.clave, texto: `${o.titulo} · ${o.devuelve}` }))} />
           <div className="fila entre">
             <span className="cap">Costo estimado: <b className="mono">{usd(opcion.costo_usd, 4)}</b></span>
-            <Boton variante={version ? undefined : "primario"} icono="graphic_eq" cargando={transcribir.isPending} onClick={() => transcribir.mutate()}>
-              {transcribir.isPending ? "Transcribiendo… puede tardar un minuto" : version ? "Transcribir de nuevo" : "Transcribir"}
+            <Boton variante={version ? undefined : "primario"} icono="graphic_eq" cargando={transcribir.isPending || enCurso(pedido)}
+              disabled={enCurso(pedido)} onClick={() => transcribir.mutate()}>
+              {enCurso(pedido) ? "En la cola…" : version ? "Transcribir de nuevo" : "Transcribir"}
             </Boton>
           </div>
           {version && <span className="ayuda">Crea una versión nueva; la principal no cambia hasta que la elija.</span>}
@@ -210,6 +231,19 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
       )}
     </div>
   );
+}
+
+function enCurso(pedido: PedidoLlamada | null | undefined): boolean {
+  return pedido?.estado === "pendiente" || pedido?.estado === "en_proceso";
+}
+
+function EstadoPedido({ pedido }: { pedido: PedidoLlamada }) {
+  if (pedido.estado === "en_proceso") return <Aviso tipo="info">Transcribiendo… puede tardar un minuto. Puede seguir trabajando: el pedido está en Transcripción › Cola.</Aviso>;
+  if (pedido.estado === "pendiente")
+    return pedido.error
+      ? <Aviso tipo="atencion">Falló el intento {pedido.intentos}: {pedido.error}. Se reintenta en la próxima sincronización.</Aviso>
+      : <Aviso tipo="info">En la cola de transcripción. Empieza en unos segundos.</Aviso>;
+  return <Aviso tipo="error">La transcripción falló tras {pedido.intentos} intentos: {pedido.error || "sin motivo registrado"}. Se puede reintentar desde aquí o desde Transcripción › Cola.</Aviso>;
 }
 
 function QuienEsQuien({ version, alGuardar }: { version: VersionTranscripcion; alGuardar: () => void }) {
