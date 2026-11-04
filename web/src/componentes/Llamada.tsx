@@ -161,25 +161,38 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
   };
   const transcribir = useMutation({
     mutationFn: () => api.post<PedidoLlamada>(`/api/llamadas/${llamadaId}/transcripciones`, { proveedor: opcion?.clave }),
-    onSuccess: () => { refrescar(); cliente.invalidateQueries({ queryKey: ["transcripcion-resumen"] }); avisar("La llamada pasó a la cola de transcripción."); },
+    onSuccess: (p) => {
+      esperado.current = p.id;
+      refrescar();
+      cliente.invalidateQueries({ queryKey: ["transcripcion-resumen"] });
+      avisar("La llamada pasó a la cola de transcripción.");
+    },
     onError: (e) => avisar((e as Error).message, "error"),
   });
   // Cuando el pedido termina, se muestra la versión nueva y se avisa.
   const pedido = datos?.pedido ?? null;
+  // El pedido que se hizo desde aquí: al terminar se muestra su versión (la
+  // más nueva), aunque la principal siga siendo otra.
+  const esperado = useRef<number | null>(null);
   const estadoAnterior = useRef<string | null>(null);
   useEffect(() => {
     const antes = estadoAnterior.current;
     estadoAnterior.current = pedido ? `${pedido.id}:${pedido.estado}:${pedido.intentos}` : null;
-    if (!antes || !pedido || !antes.startsWith(`${pedido.id}:`) || antes === estadoAnterior.current) return;
+    if (!pedido || antes === estadoAnterior.current) return;
+    const propio = esperado.current === pedido.id;
+    if (!propio && (!antes || !antes.startsWith(`${pedido.id}:`))) return;
     if (pedido.estado === "hecho") {
-      setVersionId(null);
+      esperado.current = null;
+      const nueva = [...(datos?.versiones ?? [])].sort((a, b) => b.creado_en.localeCompare(a.creado_en))[0];
+      setVersionId(nueva?.id ?? null);
       cliente.invalidateQueries({ queryKey: ["interacciones"] });
-      avisar("Transcripción lista.");
+      avisar(nueva && !nueva.principal ? "Transcripción lista: se muestra la versión nueva. Para usarla siempre, márquela como principal." : "Transcripción lista.");
     } else if (pedido.error && !enCurso(pedido)) {
+      esperado.current = null;
       avisar(`La transcripción falló: ${pedido.error}`, "error");
     }
     cliente.invalidateQueries({ queryKey: ["transcripcion-resumen"] });
-  }, [pedido, cliente, avisar]);
+  }, [pedido, datos, cliente, avisar]);
   const cambiarFrase = useMutation({
     mutationFn: ({ indice, hablante }: { indice: number; hablante: "agente" | "cliente" }) =>
       api.put(`/api/transcripciones/${version!.id}/segmentos/${indice}/hablante`, { hablante }),
@@ -213,11 +226,22 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
         {datos.versiones.length > 1 && version && (
           <div style={{ width: 360 }}>
             <Seleccion etiqueta="Versión" valor={version.id} alCambiar={setVersionId}
-              opciones={datos.versiones.map((v) => ({ valor: v.id, texto: `${v.modelo} · ${formatoFechaHora(v.creado_en)}${v.principal ? " (principal)" : ""}` }))} />
+              opciones={[...datos.versiones].sort((a, b) => b.creado_en.localeCompare(a.creado_en)).map((v, i) => ({ valor: v.id, texto: `${v.modelo} · ${formatoFechaHora(v.creado_en)}${v.principal ? " (principal)" : ""}${i === 0 && !v.principal ? " (la más nueva)" : ""}` }))} />
           </div>
         )}
       </div>
 
+      {(() => {
+        const nueva = [...(datos.versiones ?? [])].sort((a, b) => b.creado_en.localeCompare(a.creado_en))[0];
+        return nueva && version && nueva.id !== version.id ? (
+          <Aviso tipo="info">
+            <span className="fila" style={{ gap: 8 }}>
+              Hay una versión más nueva: {nueva.modelo} · {formatoFechaHora(nueva.creado_en)}.
+              <Boton chico onClick={() => setVersionId(nueva.id)}>Verla</Boton>
+            </span>
+          </Aviso>
+        ) : null;
+      })()}
       {version ? (
         <>
           <span className="cap">{version.modelo} · {CANALES[version.canales_audio] ?? version.canales_audio} · {usd(version.costo_estimado === null ? null : Number(version.costo_estimado), 4)}</span>
