@@ -35,7 +35,7 @@ COLUMNAS_CSV = {
         "id_externo": "Id Chatwoot", "inicio": "Fecha", "asesor": "Asesor", "asignacion": "Asignación",
         "motivo": "Motivo", "cliente": "Cliente", "telefono": "Teléfono", "canal": "Canal",
         "estado": "Estado", "etiquetas": "Etiquetas", "horas_resolucion": "Horas de resolución",
-        "cierre": "Cierre", "cuenta": "Cuenta", "area": "Área",
+        "cierre": "Cierre", "cuenta": "Cuenta", "area": "Área", "chat_texto": "Texto del chat",
     },
 }
 
@@ -105,6 +105,8 @@ def descargar_csv(tipo: Tipo, filtros: consultas.Filtros = Depends(_parametros),
     filas = LISTAR[tipo](s, filtros)
     if tipo == "llamada":
         filas = consultas.con_transcripciones(s, filas)
+    else:
+        filas = consultas.con_textos_de_chat(s, filas)
     nombre = f"{'llamadas' if tipo == 'llamada' else 'conversaciones'}_{filtros.desde:%Y-%m-%d}.csv"
     return Response(
         consultas.a_csv(filas, COLUMNAS_CSV[tipo]),

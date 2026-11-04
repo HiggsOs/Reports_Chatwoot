@@ -22,6 +22,7 @@ from panel.db.modelos import (
     ReglaAsignacion,
     TranscripcionGuardada,
 )
+from panel.servicios.clientes import mensajes_legibles
 from reporte import traducir_estado
 
 LIMITE_FILAS = 5000
@@ -73,6 +74,10 @@ class FilaConversacion(FilaInteraccion):
     cierre: datetime | None
     cierre_aproximado: bool
     horas_resolucion: float | None
+
+
+class FilaConversacionCsv(FilaConversacion):
+    chat_texto: str = ""
 
 
 def _filtrar(consulta, modelo, filtros: Filtros, cliente):
@@ -197,16 +202,72 @@ def textos_de_transcripcion(sesion: Session, llamada_ids: list[int]) -> dict[int
     )
     textos = {}
     for llamada_id, segmentos in filas:
-        texto = "\n".join(linea for linea in map(_linea, segmentos or []) if linea)
-        if len(texto) > MAXIMO_TEXTO_CELDA:
-            texto = texto[:MAXIMO_TEXTO_CELDA] + " … (recortada: véala completa en el panel)"
-        textos[llamada_id] = texto
+        textos[llamada_id] = _recortar("\n".join(linea for linea in map(_linea, segmentos or []) if linea))
     return textos
 
 
 def con_transcripciones(sesion: Session, filas: list[FilaLlamada]) -> list[FilaLlamadaCsv]:
     textos = textos_de_transcripcion(sesion, [f.id for f in filas])
     return [FilaLlamadaCsv(**f.model_dump(), transcripcion_texto=textos.get(f.id, "")) for f in filas]
+
+
+SIN_MENSAJES = "(los mensajes todavía no están guardados)"
+ROL_CHAT = {"cliente": "Cliente", "asesor": "Asesor", "nota": "Nota interna"}
+
+
+def _recortar(texto: str) -> str:
+    if len(texto) > MAXIMO_TEXTO_CELDA:
+        return texto[:MAXIMO_TEXTO_CELDA] + " … (recortado: véalo completo en el panel)"
+    return texto
+
+
+def _lineas_de_chat(crudos: list[dict], zona: ZoneInfo) -> list[str]:
+    lineas = []
+    for mensaje in mensajes_legibles(crudos, zona):
+        if mensaje.rol == "actividad":
+            continue
+        rol = ROL_CHAT[mensaje.rol]
+        quien = f"{rol} ({mensaje.autor})" if mensaje.autor and mensaje.autor != rol else rol
+        hora = f"[{mensaje.fecha:%d/%m %H:%M}] " if mensaje.fecha else ""
+        lineas.append(f"{hora}{quien}: {' '.join(mensaje.texto.split())}")
+    return lineas
+
+
+def textos_de_chat(
+    sesion: Session, conversacion_ids: list[int], zona: ZoneInfo = ZONA_OPERACION_POR_DEFECTO
+) -> dict[int, str]:
+    """El chat de cada conversación, un mensaje por línea con la hora y quién
+    escribió. Incluye las notas internas y los mensajes de sus finalizaciones
+    (la conversación abandonada que la continúa); deja fuera las actividades
+    del sistema."""
+    if not conversacion_ids:
+        return {}
+    filas = sesion.execute(
+        select(Conversacion.id, Conversacion.continua_de_id, Conversacion.mensajes)
+        .where(
+            or_(Conversacion.id.in_(conversacion_ids), Conversacion.continua_de_id.in_(conversacion_ids))
+        )
+        .order_by(Conversacion.inicio)
+    )
+    lineas: dict[int, list[str]] = {}
+    sin_guardar = set()
+    for conversacion_id, continua_de_id, crudos in filas:
+        propia = continua_de_id is None or conversacion_id in conversacion_ids
+        destino = conversacion_id if propia else continua_de_id
+        if crudos is None:
+            if propia:
+                sin_guardar.add(destino)
+            continue
+        lineas.setdefault(destino, []).extend(_lineas_de_chat(crudos, zona))
+    return {
+        i: SIN_MENSAJES if i in sin_guardar and not lineas.get(i) else _recortar("\n".join(lineas.get(i, [])))
+        for i in conversacion_ids
+    }
+
+
+def con_textos_de_chat(sesion: Session, filas: list[FilaConversacion]) -> list[FilaConversacionCsv]:
+    textos = textos_de_chat(sesion, [f.id for f in filas])
+    return [FilaConversacionCsv(**f.model_dump(), chat_texto=textos.get(f.id, "")) for f in filas]
 
 
 class Resumen(BaseModel):
