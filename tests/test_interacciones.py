@@ -322,6 +322,32 @@ def test_sin_usuario_se_asigna_al_asesor_que_mas_mensajes_envio(fabrica, persona
         assert guardada.cuenta_por_mensajes
 
 
+def test_revisar_sin_asignar_usa_el_correo_de_quien_mas_escribio(fabrica, personas):
+    # Luis tiene cuenta en Chatwoot pero todavía no está en Asesores: su cuenta
+    # queda sin regla y su chat, sin asignar.
+    luis = CuentaExterna(id_externo="10", nombre="Luis", correo="luis@e.com")
+    guardar_conversaciones(fabrica, (conversacion("1", luis), []))
+    chat = [{"id": 1, "message_type": 0, "content": "Hola", "created_at": 1793700000}, saliente(2, 10), saliente(3, 10)]
+    guardar_conversaciones(fabrica, (conversacion("5", None), chat))
+    assert persona_de(fabrica, Conversacion, "5")[0] is None
+
+    with unidad_de_trabajo(fabrica) as sesion:
+        RepositorioPersonas(sesion).sincronizar_areas([
+            AsesorArea(correo="juan@e.com", area="Comercial", nombre="Juan"),
+            AsesorArea(correo="ana@e.com", area="RDC", nombre="Ana"),
+            AsesorArea(correo="luis@e.com", area="RDC", nombre="Luis"),
+        ])
+        luis_id = RepositorioPersonas(sesion).activa_por_correo("luis@e.com").id
+    with unidad_de_trabajo(fabrica) as sesion:
+        resumen = ServicioInteracciones(sesion).revisar_sin_asignar()
+    assert (resumen.revisadas, resumen.cambiaron) == (2, 2)  # el chat sin usuario y el asignado a Luis
+    assert resumen.por_persona == {"Luis": 2}
+    persona, origen, motivo = persona_de(fabrica, Conversacion, "5")
+    assert (persona, origen) == (luis_id, "automatica")
+    assert motivo == f"{MOTIVO_POR_MENSAJES}: Luis (por el correo de su cuenta de Chatwoot)"
+    assert persona_de(fabrica, Conversacion, "1")[:2] == (luis_id, "automatica")
+
+
 def test_sin_usuario_usa_los_mensajes_ya_guardados(fabrica, personas):
     con_cuentas_de_chatwoot(fabrica)
     guardar_conversaciones(fabrica, (conversacion("5", None), chat_de_ana_y_juan()))

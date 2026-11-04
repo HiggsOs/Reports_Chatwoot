@@ -21,6 +21,9 @@ class ResumenCuentas(BaseModel):
     reactivadas: int = 0
     desactivadas: int = 0
     reglas_automaticas: int = 0
+    # Las cuentas a las que se les creó la regla por correo: sus interacciones
+    # ya guardadas hay que volver a asignarlas.
+    cuentas_con_regla_nueva: list[int] = []
 
 
 class ServicioCuentas:
@@ -106,18 +109,19 @@ class ServicioCuentas:
 
         self._sesion.flush()
         if plataforma in PLATAFORMAS_CON_REGLA_POR_CORREO:
-            resumen.reglas_automaticas = self._crear_reglas_por_correo(plataforma)
+            resumen.cuentas_con_regla_nueva = self._crear_reglas_por_correo(plataforma)
+            resumen.reglas_automaticas = len(resumen.cuentas_con_regla_nueva)
         return resumen
 
-    def _crear_reglas_por_correo(self, plataforma: str) -> int:
+    def _crear_reglas_por_correo(self, plataforma: str) -> list[int]:
         """A cada cuenta sin regla cuyo correo es el de una persona activa le
-        crea una regla `dueno_unico` desde siempre."""
+        crea una regla `dueno_unico` desde siempre. Devuelve esas cuentas."""
         con_reglas = self._reglas.cuentas_con_reglas()
-        return sum(
-            self._crear_regla_por_correo(cuenta)
+        return [
+            cuenta.id
             for cuenta in self._cuentas.de_plataforma(plataforma).values()
-            if cuenta.activa and cuenta.id not in con_reglas
-        )
+            if cuenta.activa and cuenta.id not in con_reglas and self._crear_regla_por_correo(cuenta)
+        ]
 
     def _crear_regla_por_correo(self, cuenta: Cuenta) -> bool:
         if not cuenta.correo:

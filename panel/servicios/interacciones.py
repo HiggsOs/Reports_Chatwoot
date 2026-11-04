@@ -17,6 +17,7 @@ from panel.db.modelos import (
     ASIGNACION_MANUAL,
     Cliente,
     Conversacion,
+    Cuenta,
     Llamada,
 )
 from panel.db.repositorios.personas import RepositorioPersonas
@@ -273,9 +274,27 @@ class ServicioInteracciones:
                 motivo = MOTIVO_SIN_USUARIO_NI_MENSAJES
             return AsignacionResuelta(persona_id=None, motivo=motivo, regla_id=None)
         resuelta = self.asignacion.resolver(interaccion.cuenta_id, interaccion.inicio)
-        if getattr(interaccion, "cuenta_por_mensajes", False):
+        por_mensajes = getattr(interaccion, "cuenta_por_mensajes", False)
+        if resuelta.persona_id is None and isinstance(interaccion, Conversacion):
+            # Una cuenta de Chatwoot es una persona: si su regla no da a nadie
+            # (no tiene, o el asesor se cargó después), vale el asesor con su correo.
+            persona = self._persona_por_correo(interaccion.cuenta_id)
+            if persona is not None:
+                origen = MOTIVO_POR_MENSAJES if por_mensajes else "Usuario asignado en Chatwoot"
+                return AsignacionResuelta(
+                    persona_id=persona.id,
+                    motivo=f"{origen}: {persona.etiqueta} (por el correo de su cuenta de Chatwoot)",
+                    regla_id=None,
+                )
+        if por_mensajes:
             resuelta.motivo = f"{MOTIVO_POR_MENSAJES} · {resuelta.motivo}"
         return resuelta
+
+    def _persona_por_correo(self, cuenta_id: int):
+        cuenta = self._sesion.get(Cuenta, cuenta_id)
+        if cuenta is None or not cuenta.correo:
+            return None
+        return self._personas.activa_por_correo(cuenta.correo)
 
     def _asignar_automatica(self, interaccion) -> bool:
         """Recalcula la asignación salvo que sea manual. Dice si cambió la persona."""
@@ -345,6 +364,42 @@ class ServicioInteracciones:
             pid: p.etiqueta
             for pid, p in self._personas.por_ids({pid for pid in conteo if pid}).items()
         }
+        resumen.por_persona = {
+            (nombres.get(pid, "?") if pid is not None else SIN_ASIGNAR): cantidad
+            for pid, cantidad in sorted(conteo.items(), key=lambda par: -par[1])
+        }
+        return resumen
+
+    def revisar_sin_asignar(self) -> ResumenReasignacion:
+        """Vuelve a mirar los chats sin asesor (los automáticos): la cuenta sale
+        de quién más mensajes envió, con los mensajes guardados, y después la
+        persona de su regla o de su correo. Sirve tras cargar asesores o
+        reglas nuevas, porque la sincronización solo revisa lo que cambió."""
+        resumen = ResumenReasignacion()
+        conteo: dict[int | None, int] = {}
+        pendientes = self._sesion.scalars(
+            select(Conversacion).where(
+                Conversacion.persona_id.is_(None),
+                Conversacion.asignacion == ASIGNACION_AUTOMATICA,
+                Conversacion.continua_de_id.is_(None),
+            ).order_by(Conversacion.inicio)
+        )
+        cambiadas = []
+        for conversacion in pendientes:
+            if conversacion.cuenta_id is None or conversacion.cuenta_por_mensajes:
+                asesor = asesor_con_mas_mensajes(conversacion.mensajes or [])
+                if asesor is not None:
+                    conversacion.cuenta_id = self._cuentas.asegurar("chatwoot", asesor.cuenta).id
+                    conversacion.cuenta_por_mensajes = True
+            cambio = self._asignar_automatica(conversacion)
+            resumen.revisadas += 1
+            resumen.cambiaron += cambio
+            if cambio:
+                cambiadas.append(conversacion.id)
+                conteo[conversacion.persona_id] = conteo.get(conversacion.persona_id, 0) + 1
+        self._sesion.flush()
+        self._actualizar_finalizaciones(cambiadas)
+        nombres = {pid: p.etiqueta for pid, p in self._personas.por_ids({pid for pid in conteo if pid}).items()}
         resumen.por_persona = {
             (nombres.get(pid, "?") if pid is not None else SIN_ASIGNAR): cantidad
             for pid, cantidad in sorted(conteo.items(), key=lambda par: -par[1])

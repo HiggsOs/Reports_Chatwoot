@@ -206,7 +206,11 @@ def actualizar(c: Contenedor = Depends(contenedor)) -> Actualizacion:
             errores.append(f"{NOMBRES[plataforma]}: {error}")
             continue
         with unidad_de_trabajo(c.fabrica) as s:
-            r = ServicioCuentas(s).actualizar(plataforma, externas)
+            interacciones = ServicioInteracciones(s)
+            r = ServicioCuentas(s, interacciones.asignacion).actualizar(plataforma, externas)
+            # Lo que ya estaba guardado de esas cuentas quedó sin regla: se reasigna.
+            for cuenta_id in r.cuentas_con_regla_nueva:
+                interacciones.reasignar_cuenta(cuenta_id, DESDE_SIEMPRE)
         mensajes.append(
             f"{NOMBRES[plataforma]}: {len(externas)} cuentas ({r.nuevas} nuevas, {r.actualizadas} con cambios, "
             f"{r.reactivadas} reactivadas, {r.desactivadas} desactivadas)."

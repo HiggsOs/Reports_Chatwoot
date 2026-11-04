@@ -17,7 +17,7 @@ from panel.db.repositorios.personas import RepositorioPersonas
 from panel.esquemas.personas import PersonaResumida
 from panel.exportar import TIPO_XLSX
 from panel.servicios import clientes, consultas
-from panel.servicios.interacciones import ServicioInteracciones
+from panel.servicios.interacciones import ResumenReasignacion, ServicioInteracciones
 
 router = APIRouter(prefix="/api", tags=["interacciones"])
 
@@ -159,6 +159,13 @@ def asignar_en_bloque(datos: AsignacionEnBloque, s: Session = Depends(sesion)) -
         _existe(s, datos.tipo, interaccion_id)
         servicio.asignar_manual(datos.tipo, interaccion_id, datos.persona_id)
     return ResultadoBloque(asignadas=len(set(datos.ids)))
+
+
+@router.post("/sin-asignar/revisar", response_model=ResumenReasignacion)
+def revisar_sin_asignar(s: Session = Depends(sesion)) -> ResumenReasignacion:
+    """Vuelve a mirar los chats sin asesor: el que más mensajes envió, por su
+    regla o por su correo. Lo asignado a mano no se toca."""
+    return ServicioInteracciones(s).revisar_sin_asignar()
 
 
 @router.get("/conversaciones/{conversacion_id}/mensajes", response_model=list[clientes.Mensaje] | None)
