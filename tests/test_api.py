@@ -415,3 +415,38 @@ def test_modelos_disponibles_del_proveedor(con_sesion, monkeypatch):
     monkeypatch.setattr(registro, "listar_modelos", falla)
     r = con_sesion.get("/api/transcripcion/proveedores/deepgram/modelos")
     assert r.status_code == 502 and r.json()["detail"] == "Deepgram respondió 500."
+
+
+def test_traer_lo_cobrado_y_usar_el_precio_real(entorno, datos, tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    from panel.transcripcion import registro
+    from panel.transcripcion.base import CobroInformado
+
+    mes = date.today().replace(day=1).isoformat()
+    sin_clave = TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web"))
+    with sin_clave as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        assert cliente.post("/api/transcripcion/cobros/traer", json={"mes": mes}, headers=CABECERA).status_code == 409
+
+    monkeypatch.setattr(registro, "cobros", lambda nombre, valores, desde, hasta: [
+        CobroInformado(modelo="nova-3", minutos=Decimal("100"), usd=Decimal("0.52"))])
+    entorno = {**entorno, "DEEPGRAM_API_KEY": "dg"}
+    with TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web")) as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        r = cliente.post("/api/transcripcion/cobros/traer", json={"mes": mes}, headers=CABECERA)
+        assert r.status_code == 200
+        assert r.json() == [{"proveedor": "deepgram", "titulo": "Deepgram", "ok": True,
+                             "mensaje": "Cobrado: nova-3: 100.0 min y 0.52 USD."}]
+        fila = next(f for f in cliente.get("/api/transcripcion/gasto", params={"mes": mes}).json()
+                    if f["modelo"] == "nova-3")
+        assert fila["precio_real"] == pytest.approx(0.0052)
+
+        r = cliente.put("/api/transcripcion/modelos/precio",
+                        json={"proveedor": "deepgram", "modelo": "nova-3", "precio_minuto": "0.0052"}, headers=CABECERA)
+        assert r.status_code == 204
+        modelos = cliente.get("/api/transcripcion/configuracion").json()["modelos"]
+        assert next(m for m in modelos if m["modelo"] == "nova-3")["precio_minuto"] == "0.0052"
+        r = cliente.put("/api/transcripcion/modelos/precio",
+                        json={"proveedor": "deepgram", "modelo": "no-existe", "precio_minuto": "1"}, headers=CABECERA)
+        assert r.status_code == 404

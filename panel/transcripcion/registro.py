@@ -5,10 +5,12 @@ Agregar un proveedor es escribir su clase en `estrategias/` y decorarla con
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from decimal import Decimal
 
 from panel.transcripcion.base import (
     Capacidades,
+    CobroInformado,
     EstrategiaTranscripcion,
     FabricaEstrategia,
     TranscripcionNoDisponible,
@@ -66,6 +68,20 @@ def listar_modelos(nombre: str, valores: Mapping[str, str], idioma: str) -> list
     if listar is None:
         raise TranscripcionNoDisponible("Este proveedor no informa sus modelos.")
     return listar(valores, idioma)
+
+
+def informa_cobros(nombre: str) -> bool:
+    """Si el proveedor dice por API cuánto cobró (para no cargarlo a mano)."""
+    return hasattr(_FABRICAS.get(nombre), "cobros")
+
+
+def cobros(nombre: str, valores: Mapping[str, str], desde: datetime, hasta: datetime) -> list[CobroInformado]:
+    """Lo que el proveedor cobró por modelo en [desde, hasta), según su API.
+    Lanza TranscripcionError si falla."""
+    fabrica = _FABRICAS.get(nombre)
+    if not informa_cobros(nombre):
+        raise TranscripcionNoDisponible("Este proveedor no informa lo cobrado.")
+    return fabrica.cobros(valores, desde, hasta)
 
 
 def crear_modelo(

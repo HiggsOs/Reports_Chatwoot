@@ -390,3 +390,46 @@ def test_openai_lista_solo_los_de_transcripcion():
     modelos = registro.listar_modelos("openai", {"OPENAI_API_KEY": "sk"}, "es")
     assert modelos == ["gpt-4o-transcribe-diarize", "whisper-1", "gpt-transcribe"]
     assert registro.capacidades("openai", "gpt-transcribe") is None
+
+
+@responses.activate
+def test_deepgram_suma_lo_cobrado_por_modelo_desde_el_historial():
+    from datetime import datetime, timezone
+
+    base = "https://api.deepgram.com/v1"
+    responses.get(f"{base}/projects", json={"projects": [{"project_id": "p1"}]})
+
+    def pedido(ruta, usd, duracion):
+        return {"request_id": ruta, "path": ruta, "response": {"code": 200, "details": {"usd": usd, "duration": duracion}}}
+
+    pagina = [pedido("/v1/listen?model=nova-3&language=es", 0.0129, 180.0) for _ in range(2)]
+    pagina += [pedido("/v1/listen?language=es&model=nova-2", 0.0043, 60.0),
+               pedido("/v1/speak?model=aura", 0.03, 0),  # voz, no transcripción: no cuenta
+               {"path": "/v1/listen?model=nova-3", "response": {"code": 200}}]  # sin costo: se salta
+    responses.get(f"{base}/projects/p1/requests", json={"page": 0, "limit": 1000, "requests": pagina})
+
+    desde = datetime(2026, 10, 31, 23, 0, tzinfo=timezone.utc)
+    cobros = registro.cobros("deepgram", {"DEEPGRAM_API_KEY": "dg"}, desde, datetime(2026, 11, 30, 23, 0, tzinfo=timezone.utc))
+    assert [(c.modelo, c.minutos, c.usd) for c in cobros] == [
+        ("nova-2", Decimal("1.00"), Decimal("0.0043")),
+        ("nova-3", Decimal("6.00"), Decimal("0.0258")),
+    ]
+    consulta = responses.calls[1].request.url
+    assert "start=2026-10-31T23%3A00%3A00Z" in consulta and "status=succeeded" in consulta
+    assert registro.informa_cobros("deepgram") and not registro.informa_cobros("openai")
+
+
+@responses.activate
+def test_deepgram_cobros_sin_costo_o_sin_permiso_dicen_por_que():
+    from datetime import datetime, timezone
+
+    base = "https://api.deepgram.com/v1"
+    desde, hasta = datetime(2026, 11, 1, tzinfo=timezone.utc), datetime(2026, 12, 1, tzinfo=timezone.utc)
+    responses.get(f"{base}/projects", json={"projects": [{"project_id": "p1"}]})
+    responses.get(f"{base}/projects/p1/requests", json={"requests": [{"path": "/v1/listen?model=nova-3", "response": {}}]})
+    with pytest.raises(TranscripcionError, match="no informó el costo"):
+        registro.cobros("deepgram", {"DEEPGRAM_API_KEY": "dg"}, desde, hasta)
+
+    responses.replace(responses.GET, f"{base}/projects/p1/requests", status=403)
+    with pytest.raises(TranscripcionError, match="administrador"):
+        registro.cobros("deepgram", {"DEEPGRAM_API_KEY": "dg"}, desde, hasta)

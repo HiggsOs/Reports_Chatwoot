@@ -15,15 +15,19 @@ Transcripción › Configuración como en cualquier modelo.
 
 import math
 import time
+from collections import defaultdict
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from string import ascii_uppercase
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
 from panel.transcripcion.base import (
     AudioPreparado,
     Capacidades,
+    CobroInformado,
     OpcionesTranscripcion,
     Segmento,
     Transcripcion,
@@ -38,6 +42,9 @@ TIEMPO_LIMITE_SEGUNDOS = 600
 INTENTOS_MAXIMOS = 3
 ESPERA_BASE_SEGUNDOS = 2.0
 ESPERA_MAXIMA_SEGUNDOS = 60.0
+# Pedidos por página al leer el historial de pedidos (y un tope de páginas).
+PEDIDOS_POR_PAGINA = 1000
+PAGINAS_MAXIMAS = 200
 # Deepgram acepta archivos de hasta 2 GB: una llamada nunca llega.
 CAPACIDADES = Capacidades(diarizacion=True, marcas_de_tiempo=True, tamano_max_bytes=None)
 
@@ -160,6 +167,79 @@ class EstrategiaDeepgram:
             if nombre:
                 modelos.add(str(nombre))
         return sorted(modelos, key=lambda m: (not m.startswith("nova-3"), not m.startswith("nova-2"), m))
+
+    @classmethod
+    def cobros(cls, valores: Mapping[str, str], desde: datetime, hasta: datetime) -> list[CobroInformado]:
+        """Lo cobrado por modelo en [desde, hasta), sumando el historial de
+        pedidos de cada proyecto (`GET /projects/{id}/requests`): cada
+        transcripción trae su costo (`usd`) y su duración. El modelo sale del
+        `model=` con que se pidió."""
+        clave = (valores.get("DEEPGRAM_API_KEY") or "").strip()
+        if not clave:
+            raise TranscripcionNoDisponible("Falta la clave de Deepgram.")
+        url = _url(valores)
+        segundos: dict[str, Decimal] = defaultdict(Decimal)
+        usd: dict[str, Decimal] = defaultdict(Decimal)
+        transcripciones = con_costo = 0
+        for proyecto in cls._json(url, clave, "/projects").get("projects") or []:
+            for pedido in cls._pedidos(url, clave, proyecto.get("project_id"), desde, hasta):
+                ruta = pedido.get("path") or ""
+                if "/listen" not in ruta:
+                    continue
+                transcripciones += 1
+                detalles = (pedido.get("response") or {}).get("details") or {}
+                costo, duracion = _numero(detalles.get("usd")), _numero(detalles.get("duration"))
+                if costo is None:
+                    continue
+                con_costo += 1
+                modelo = (parse_qs(urlparse(ruta).query).get("model") or ["sin modelo"])[0]
+                usd[modelo] += Decimal(str(costo))
+                segundos[modelo] += Decimal(str(duracion or 0))
+        if transcripciones and not con_costo:
+            raise TranscripcionError(
+                "Deepgram no informó el costo de las transcripciones: cargue lo cobrado a mano."
+            )
+        return [
+            CobroInformado(
+                modelo=modelo,
+                minutos=(segundos[modelo] / 60).quantize(Decimal("0.01")),
+                usd=usd[modelo].quantize(Decimal("0.0001")),
+            )
+            for modelo in sorted(usd)
+        ]
+
+    @classmethod
+    def _pedidos(cls, url: str, clave: str, proyecto: str | None, desde: datetime, hasta: datetime):
+        if not proyecto:
+            return
+        utc = lambda momento: momento.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        for pagina in range(PAGINAS_MAXIMAS):
+            datos = cls._json(url, clave, f"/projects/{proyecto}/requests", {
+                "start": utc(desde), "end": utc(hasta), "status": "succeeded",
+                "limit": PEDIDOS_POR_PAGINA, "page": pagina,
+            })
+            pedidos = datos.get("requests") or []
+            yield from pedidos
+            if len(pedidos) < PEDIDOS_POR_PAGINA:
+                return
+
+    @staticmethod
+    def _json(url: str, clave: str, ruta: str, parametros: dict | None = None) -> dict:
+        try:
+            respuesta = requests.get(f"{url}{ruta}", params=parametros, headers=_cabeceras(clave), timeout=30)
+        except requests.RequestException as error:
+            raise TranscripcionError("No se pudo conectar con Deepgram.") from error
+        if respuesta.status_code in (401, 403):
+            raise TranscripcionError(
+                "Deepgram no deja ver el uso con esta clave: hace falta una clave con permiso de "
+                "administrador o miembro del proyecto."
+            )
+        if respuesta.status_code >= 400:
+            raise TranscripcionError(f"Deepgram respondió {respuesta.status_code}: {respuesta.text[:200]}")
+        try:
+            return respuesta.json()
+        except ValueError as error:
+            raise TranscripcionError("Deepgram respondió algo que no es JSON.") from error
 
     @staticmethod
     def _saldo(url: str, clave: str, proyectos: list[dict]) -> str:

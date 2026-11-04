@@ -272,6 +272,70 @@ def guardar_cobro(cobro: Cobro, s: Session = Depends(sesion)) -> None:
     consultas.guardar_cobro(s, cobro.mes, cobro.proveedor, cobro.modelo, cobro.minutos, cobro.usd)
 
 
+class CobrosTraidos(BaseModel):
+    proveedor: str
+    titulo: str
+    ok: bool
+    mensaje: str
+
+
+class PedidoCobros(BaseModel):
+    mes: date
+
+
+@router.post("/transcripcion/cobros/traer", response_model=list[CobrosTraidos])
+def traer_cobros(
+    pedido: PedidoCobros, c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)
+) -> list[CobrosTraidos]:
+    """Pide a cada proveedor con clave lo que cobró en el mes y lo guarda como
+    el cobro de cada modelo (pisa lo cargado a mano para esos modelos)."""
+    valores = {**c.entorno, **c.lectura.valores}
+    desde, hasta = consultas.limites_del_mes(pedido.mes)
+    resultados = []
+    for nombre in registro.nombres():
+        variable = registro.variable_clave(nombre)
+        if not registro.informa_cobros(nombre) or not variable or not (valores.get(variable) or "").strip():
+            continue
+        titulo = registro.titulo(nombre)
+        try:
+            cobros = registro.cobros(nombre, valores, desde, hasta)
+        except TranscripcionError as error:
+            resultados.append(CobrosTraidos(proveedor=nombre, titulo=titulo, ok=False, mensaje=str(error)))
+            continue
+        for cobro in cobros:
+            consultas.guardar_cobro(s, pedido.mes, nombre, cobro.modelo, cobro.minutos, cobro.usd)
+        detalle = "; ".join(f"{c.modelo}: {c.minutos:.1f} min y {c.usd:.2f} USD" for c in cobros)
+        resultados.append(CobrosTraidos(
+            proveedor=nombre, titulo=titulo, ok=True,
+            mensaje=f"Cobrado: {detalle}." if cobros else "No hay transcripciones cobradas en ese mes.",
+        ))
+    if not resultados:
+        raise HTTPException(409, "Ningún proveedor con clave informa lo cobrado. Hoy lo hace Deepgram.")
+    return resultados
+
+
+class NuevoPrecio(BaseModel):
+    proveedor: str
+    modelo: str
+    precio_minuto: Decimal
+
+
+@router.put("/transcripcion/modelos/precio", status_code=204)
+def usar_precio(datos: NuevoPrecio, c: Contenedor = Depends(contenedor)) -> None:
+    """Pone ese precio por minuto al modelo (por ejemplo, el real cobrado)."""
+    if datos.precio_minuto < 0:
+        raise HTTPException(422, "El precio no puede ser negativo.")
+    modelos = _modelos_iniciales(c)
+    if not any(m.proveedor == datos.proveedor and m.modelo == datos.modelo for m in modelos):
+        raise HTTPException(404, "Ese modelo no está en la lista de Configuración.")
+    nuevos = [
+        m.model_copy(update={"precio_minuto": datos.precio_minuto})
+        if m.proveedor == datos.proveedor and m.modelo == datos.modelo else m
+        for m in modelos
+    ]
+    guardar(c, {"TRANSCRIPCION_MODELOS": json.dumps([m.model_dump(mode="json") for m in nuevos], ensure_ascii=False)})
+
+
 @router.get("/transcripcion/comparables", response_model=list[consultas.LlamadaComparable])
 def comparables(s: Session = Depends(sesion)):
     return consultas.llamadas_comparables(s)

@@ -6,7 +6,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Link } from "react-router-dom";
 import { api } from "../api/cliente";
 import type {
-  ConfiguracionTranscripcion, FilaGasto, LlamadaComparable, ModeloDisponible, ModeloTranscripcion, Prueba, ResumenTranscripcion,
+  CobrosTraidos, ConfiguracionTranscripcion, FilaGasto, LlamadaComparable, ModeloDisponible, ModeloTranscripcion, Prueba, ResumenTranscripcion,
   TranscripcionesLlamada,
 } from "../api/tipos";
 import { Aviso, Boton, Cabecera, Cargando, ErrorCarga, Insignia, Metrica, Tarjeta } from "../componentes/basicos";
@@ -132,6 +132,24 @@ function Gasto() {
     (filas.data ?? []).forEach((f) => todos.set(`${f.proveedor}:${f.modelo}`, { proveedor: f.proveedor, modelo: f.modelo, titulo: f.titulo }));
     return [...todos.values()];
   }, [configuracion.data, filas.data]);
+  const avisar = useAvisos();
+  const cliente = useQueryClient();
+  const configurados = new Set((configuracion.data?.modelos ?? []).map((m) => `${m.proveedor}:${m.modelo}`));
+  const traer = useMutation({
+    mutationFn: () => api.post<CobrosTraidos[]>("/api/transcripcion/cobros/traer", { mes }),
+    onSuccess: () => cliente.invalidateQueries({ queryKey: ["gasto"] }),
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  const usarPrecio = useMutation({
+    mutationFn: (datos: { proveedor: string; modelo: string; precio_minuto: number }) => api.put("/api/transcripcion/modelos/precio", datos),
+    onSuccess: (_r, datos) => {
+      avisar(`Precio de ${datos.proveedor} · ${datos.modelo} actualizado a ${numero(datos.precio_minuto, 5)} USD/min.`);
+      cliente.invalidateQueries({ queryKey: ["gasto"] });
+      cliente.invalidateQueries({ queryKey: ["transcripcion-configuracion"] });
+    },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  useEffect(() => traer.reset(), [mes]); // eslint-disable-line react-hooks/exhaustive-deps
   const diferencia = (f: FilaGasto) => (f.diferencia === null ? "—" : `${f.diferencia > 0 ? "+" : ""}${numero(f.diferencia * 100, 1)} %`);
 
   return (
@@ -148,7 +166,15 @@ function Gasto() {
             ]} />
           </Tarjeta>
           <Tarjeta>
-            <div className="tarjeta-cab"><b>Precio real cobrado</b><span className="cap">Cargue lo que dice la factura o el panel de uso del proveedor. Más de un 5 % de diferencia se marca como desviado.</span></div>
+            <div className="tarjeta-cab">
+              <div><b>Precio real cobrado</b><br /><span className="cap">Tráigalo del proveedor (hoy Deepgram) o cárguelo abajo con lo que dice la factura. Más de un 5 % de diferencia se marca como desviado.</span></div>
+              <Boton icono="download" cargando={traer.isPending} onClick={() => traer.mutate()}>Traer lo cobrado en {textoMes}</Boton>
+            </div>
+            {traer.data?.map((r) => (
+              <div key={r.proveedor} style={{ padding: "0 14px 10px" }}>
+                <Aviso tipo={r.ok ? "exito" : "error"}><b>{r.titulo}:</b> {r.mensaje}</Aviso>
+              </div>
+            ))}
             <Tabla filas={filas.data!} clave={(f) => `${f.proveedor}:${f.modelo}`} alto="auto" vacio="Sin datos en ese mes." columnas={[
               { titulo: "Modelo", celda: (f) => <span className="mono">{f.titulo}</span> },
               { titulo: "Min cobrados", celda: (f) => <span className="mono">{numero(f.minutos_cobrados, 0)}</span>, derecha: true },
@@ -157,10 +183,14 @@ function Gasto() {
               { titulo: "USD/min real", celda: (f) => <span className="mono">{numero(f.precio_real, 4)}</span>, derecha: true },
               { titulo: "USD/min configurado", celda: (f) => <span className="mono">{numero(f.precio_configurado, 4)}</span>, derecha: true },
               { titulo: "Diferencia", celda: (f) => (f.desviado ? <Insignia tono="desviado" icono="warning">{diferencia(f)}</Insignia> : <span className="mono">{diferencia(f)}</span>), derecha: true },
+              { titulo: "", celda: (f) => (f.precio_real !== null && (f.desviado || f.precio_configurado === null) && configurados.has(`${f.proveedor}:${f.modelo}`)
+                ? <Boton chico icono="price_check" cargando={usarPrecio.isPending && usarPrecio.variables?.modelo === f.modelo}
+                    onClick={() => usarPrecio.mutate({ proveedor: f.proveedor, modelo: f.modelo, precio_minuto: f.precio_real! })}>Usar este precio</Boton>
+                : null) },
             ]} />
             {filas.data!.filter((f) => f.desviado).map((f) => (
               <div key={f.titulo} style={{ padding: "0 14px 14px" }}>
-                <Aviso tipo="atencion">{f.titulo} cobra {diferencia(f)} respecto de lo configurado. Actualice el precio a {numero(f.precio_real, 4)} USD/min en Configuración o revise si el proveedor redondea cada audio al minuto.</Aviso>
+                <Aviso tipo="atencion">{f.titulo} cobra {diferencia(f)} respecto de lo configurado. Use el precio real ({numero(f.precio_real, 4)} USD/min) o revise si el proveedor redondea cada audio al minuto.</Aviso>
               </div>
             ))}
           </Tarjeta>
