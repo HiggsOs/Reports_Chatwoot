@@ -117,7 +117,7 @@ se guardan cifradas con `PANEL_CLAVE_CIFRADO` (o, si no está, con
 | `FTP_DIR` | Carpeta de los audios dentro de esa cuenta. Por defecto `/` |
 | `SFTP_HUELLA_HOST` | Huella del servidor SFTP (`SHA256:…`); ver *Audio de las llamadas* |
 | `AUDIO_RETENCION_DIAS` | Días que se guarda un audio, desde la fecha de la llamada. Por defecto `90` |
-| `TRANSCRIPCION_PROVEEDOR` | Quién transcribe: `openai` (por defecto si hay `OPENAI_API_KEY`) o `falsa` (texto fijo, para pruebas). Vacío y sin clave: la transcripción está apagada |
+| `TRANSCRIPCION_PROVEEDOR` | Quién transcribe: `openai` (por defecto si hay `OPENAI_API_KEY`), `deepgram` o `falsa` (texto fijo, para pruebas). Vacío y sin clave: la transcripción está apagada |
 | `TRANSCRIPCION_RESPALDO` | Proveedores a probar si falla el principal, separados por coma |
 | `TRANSCRIPCION_IDIOMA` | Por defecto `es` |
 | `TRANSCRIPCION_VOCABULARIO` | Palabras propias separadas por coma (marcas, productos), para que el modelo las escriba bien |
@@ -128,6 +128,9 @@ se guardan cifradas con `PANEL_CLAVE_CIFRADO` (o, si no está, con
 | `OPENAI_MODELO_TRANSCRIPCION` | Por defecto `gpt-4o-transcribe-diarize` |
 | `OPENAI_FORMATO_RESPUESTA` | Solo para un modelo que el código no conoce: `diarized_json`, `verbose_json` o `json` |
 | `OPENAI_PRECIO_MINUTO` | Precio por minuto de audio en USD, para el costo estimado. Sin valor, el panel no muestra costos |
+| `DEEPGRAM_API_KEY` | Clave de la API de Deepgram (se puede cargar en Transcripción › Configuración) |
+| `DEEPGRAM_MODELO_TRANSCRIPCION` | Por defecto `nova-3` |
+| `DEEPGRAM_PRECIO_MINUTO` | Precio por minuto de audio en USD, para el costo estimado |
 | `TRANSCRIPCION_MODELOS` | Modelos que se pueden elegir con su precio, en JSON. Normalmente se carga en Transcripción › Configuración |
 | `TRANSCRIPCION_TOPE_MENSUAL_USD` | Al llegar, la cola de transcripción se pausa hasta el mes siguiente. Vacío: sin tope |
 | `TRANSCRIPCION_AVISO_PORCENTAJE` | Porcentaje del tope en que Inicio avisa. Por defecto `80` |
@@ -395,7 +398,9 @@ a lado.
 defecto es `gpt-4o-transcribe-diarize`, el único que hoy separa hablantes;
 OpenAI anunció su apagado para el 26/02/2027, así que antes de esa fecha hay que
 cambiar `OPENAI_MODELO_TRANSCRIPCION` (y `OPENAI_FORMATO_RESPUESTA` si el modelo
-nuevo no es uno que el código conozca). Para sumar otro proveedor: una clase con
+nuevo no es uno que el código conozca). Deepgram (`nova-3` por defecto) separa
+hablantes en cualquier modelo y las cuentas nuevas traen crédito gratis; *Probar*
+la clave muestra el saldo que queda. Para sumar otro proveedor: una clase con
 `@registrar`, sus variables de entorno, y su caso en las pruebas de contrato de
 `tests/test_transcripcion_estrategias.py`.
 
