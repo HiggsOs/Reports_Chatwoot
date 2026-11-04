@@ -29,7 +29,7 @@ COLUMNAS_CSV = {
         "id_externo": "Id CloudTalk", "inicio": "Fecha", "asesor": "Asesor", "asignacion": "Asignación",
         "motivo": "Motivo", "cliente": "Cliente", "telefono": "Teléfono", "direccion": "Dirección",
         "duracion_s": "Duración (s)", "audio_estado": "Audio", "transcripcion_estado": "Transcripción",
-        "cuenta": "Cuenta", "area": "Área",
+        "cuenta": "Cuenta", "area": "Área", "transcripcion_texto": "Texto de la transcripción",
     },
     "conversacion": {
         "id_externo": "Id Chatwoot", "inicio": "Fecha", "asesor": "Asesor", "asignacion": "Asignación",
@@ -103,6 +103,8 @@ def listar(tipo: Tipo, filtros: consultas.Filtros = Depends(_parametros), s: Ses
 @router.get("/interacciones/{tipo}/csv")
 def descargar_csv(tipo: Tipo, filtros: consultas.Filtros = Depends(_parametros), s: Session = Depends(sesion)):
     filas = LISTAR[tipo](s, filtros)
+    if tipo == "llamada":
+        filas = consultas.con_transcripciones(s, filas)
     nombre = f"{'llamadas' if tipo == 'llamada' else 'conversaciones'}_{filtros.desde:%Y-%m-%d}.csv"
     return Response(
         consultas.a_csv(filas, COLUMNAS_CSV[tipo]),
