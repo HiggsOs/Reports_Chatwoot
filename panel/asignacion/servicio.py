@@ -107,11 +107,17 @@ class ServicioAsignacion:
         estrategia: str,
         parametros: Mapping | BaseModel,
         vigente_desde: datetime,
+        corregir_posteriores: bool = False,
     ) -> ReglaAsignacion:
         """Guarda una regla nueva y cierra la anterior en `vigente_desde`.
 
         Si la anterior empezaba en el mismo momento, queda con vigencia vacía:
         es la forma de corregir una regla sin borrarla.
+
+        Con `corregir_posteriores`, la regla nueva puede empezar antes que la
+        última: las que empezaban desde esa fecha quedan con vigencia vacía
+        («corregida, nunca rigió») y la que regía en esa fecha se cierra ahí.
+        Sirve para arreglar hacia atrás una regla que estaba mal.
         """
         if vigente_desde.tzinfo is None:
             raise ValueError("vigente_desde debe traer zona horaria.")
@@ -135,6 +141,16 @@ class ServicioAsignacion:
             raise ReglaInvalida(_errores_de_validacion(error)) from None
 
         errores = self._errores_de_personas(implementacion, validados)
+        if corregir_posteriores:
+            if errores:
+                raise ReglaInvalida(errores)
+            for regla in self._reglas.historial(cuenta_id):
+                if regla.vigente_desde >= vigente_desde:
+                    regla.vigente_hasta = regla.vigente_desde  # nunca rigió
+                elif regla.vigente_hasta is None or regla.vigente_hasta > vigente_desde:
+                    regla.vigente_hasta = vigente_desde
+            self._sesion.flush()
+            return self._agregar(cuenta_id, implementacion, validados, vigente_desde)
         anterior = self._reglas.ultima(cuenta_id)
         if anterior is not None:
             if vigente_desde < anterior.vigente_desde:
@@ -151,6 +167,9 @@ class ServicioAsignacion:
             anterior.vigente_hasta = vigente_desde
             self._sesion.flush()
 
+        return self._agregar(cuenta_id, implementacion, validados, vigente_desde)
+
+    def _agregar(self, cuenta_id, implementacion, validados, vigente_desde) -> ReglaAsignacion:
         self._cache.pop(cuenta_id, None)
         return self._reglas.agregar(
             ReglaAsignacion(

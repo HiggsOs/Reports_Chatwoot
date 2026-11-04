@@ -137,6 +137,29 @@ def test_no_se_puede_crear_una_regla_que_empiece_antes_que_la_ultima(fabrica, da
         crear(fabrica, datos, "dueno_unico", {"persona_id": datos["ana"]}, utc(2026, 10, 1))
 
 
+def test_corregir_hacia_atras_reemplaza_las_reglas_posteriores(fabrica, datos):
+    crear(fabrica, datos, "dueno_unico", {"persona_id": datos["juan"]})
+    octubre, noviembre = datetime(2026, 10, 1, tzinfo=MADRID), datetime(2026, 11, 1, tzinfo=MADRID)
+    crear(fabrica, datos, "fijo_y_resto", fijo_y_resto(datos, "20:00", "22:00"), octubre)  # horario mal cargado
+    crear(fabrica, datos, "dueno_unico", {"persona_id": datos["ana"]}, noviembre)
+
+    with unidad_de_trabajo(fabrica) as sesion:
+        ServicioAsignacion(sesion).crear_regla(
+            datos["cuenta"], "fijo_y_resto", fijo_y_resto(datos), octubre, corregir_posteriores=True
+        )
+    # Un martes de octubre a las 10 y otro de noviembre: rige la corregida.
+    assert asignar(fabrica, datos, utc(2026, 10, 13, 8)).persona_id == datos["juan"]
+    assert asignar(fabrica, datos, utc(2026, 11, 10, 9)).persona_id == datos["juan"]
+    assert asignar(fabrica, datos, utc(2026, 9, 15, 20)).persona_id == datos["juan"]  # antes: la de siempre
+    with unidad_de_trabajo(fabrica) as sesion:
+        historial = RepositorioReglas(sesion).historial(datos["cuenta"])
+    vigencias = [(r.estrategia, r.vigente_desde, r.vigente_hasta) for r in historial]
+    assert vigencias[0][0] == "dueno_unico" and vigencias[0][1] == vigencias[0][2] == noviembre  # nunca rigió
+    assert ("fijo_y_resto", octubre, None) in vigencias  # la corregida, vigente
+    assert sum(1 for _, desde, hasta in vigencias if desde == hasta == octubre) == 1  # la mal cargada
+    assert ("dueno_unico", DESDE_SIEMPRE, octubre) in vigencias
+
+
 def test_rechaza_parametros_invalidos_con_mensajes_legibles(fabrica, datos):
     parametros = {**fijo_y_resto(datos), "persona_resto_id": datos["juan"]}
     with pytest.raises(ReglaInvalida) as error:

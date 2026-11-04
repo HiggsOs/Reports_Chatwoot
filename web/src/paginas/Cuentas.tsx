@@ -87,6 +87,7 @@ function Cuenta({ id }: { id: number }) {
         </Tarjeta>
       )}
       <NuevaRegla cuenta={d} />
+      {d.estrategia && <Recalcular cuenta={d} />}
     </>
   );
 }
@@ -126,6 +127,43 @@ function Fila({ dia, fila, color }: { dia: string; fila: (string | null)[]; colo
   );
 }
 
+function Recalcular({ cuenta }: { cuenta: DetalleCuenta }) {
+  const cliente = useQueryClient();
+  const avisar = useAvisos();
+  const [desde, setDesde] = useState(() => diaIso(new Date(Date.now() - 30 * 86_400_000)));
+  const [previa, setPrevia] = useState<ResumenReasignacion | null>(null);
+  useEffect(() => setPrevia(null), [desde, cuenta.id]);
+  const pedir = (soloPrevia: boolean) => api.post<ResumenReasignacion>(`/api/cuentas/${cuenta.id}/reasignar`, { desde, previa: soloPrevia });
+  const verPrevia = useMutation({ mutationFn: () => pedir(true), onSuccess: setPrevia, onError: (e) => avisar((e as Error).message, "error") });
+  const aplicar = useMutation({
+    mutationFn: () => pedir(false),
+    onSuccess: (r) => {
+      avisar(`Asignación recalculada para ${cuenta.nombre}: cambiaron de asesor ${entero(r.cambiaron)} de ${entero(r.revisadas)} interacciones.`);
+      setPrevia(null);
+      ["cuentas", "cuenta", "interacciones", "inicio"].forEach((k) => cliente.invalidateQueries({ queryKey: [k] }));
+    },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  return (
+    <Tarjeta padding style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div><h2>Volver a calcular la asignación · {cuenta.nombre}</h2>
+        <span className="cap">Vuelve a asignar las llamadas y chats desde esa fecha con las reglas guardadas (las del historial, cada una en su período). Las asignadas a mano no se tocan.</span></div>
+      <div className="fila" style={{ alignItems: "end", gap: 12 }}>
+        <div style={{ width: 200 }}><Texto etiqueta="Desde (00:00, hora de España)" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></div>
+        <Boton icono="visibility" cargando={verPrevia.isPending} onClick={() => verPrevia.mutate()}>Ver vista previa</Boton>
+        <Boton variante="primario" icono="sync" disabled={!previa} cargando={aplicar.isPending} onClick={() => aplicar.mutate()}
+          title={previa ? undefined : "Vea la vista previa antes"}>Volver a calcular</Boton>
+      </div>
+      {previa && (
+        <Aviso tipo={previa.cambiaron ? "atencion" : "info"}>
+          {previa.revisadas === 0 ? "No hay llamadas ni chats de esta cuenta desde esa fecha."
+            : <>Cambiarían de asesor <b>{entero(previa.cambiaron)} de {entero(previa.revisadas)}</b> interacciones. Quedarían así: {Object.entries(previa.por_persona).map(([p, n]) => `${p}: ${entero(n)}`).join(" · ")}.</>}
+        </Aviso>
+      )}
+    </Tarjeta>
+  );
+}
+
 function NuevaRegla({ cuenta }: { cuenta: DetalleCuenta }) {
   const cliente = useQueryClient();
   const avisar = useAvisos();
@@ -136,6 +174,7 @@ function NuevaRegla({ cuenta }: { cuenta: DetalleCuenta }) {
   const [parametros, setParametros] = useState<Parametros>(cuenta.ultimos_parametros ?? {});
   const [desdeSiempre, setDesdeSiempre] = useState(cuenta.ultima_estrategia === null);
   const [desde, setDesde] = useState(diaIso());
+  const [corregir, setCorregir] = useState(false);
   const [previa, setPrevia] = useState<ResumenReasignacion | null>(null);
   useEffect(() => {
     setEstrategia(inicial);
@@ -143,11 +182,12 @@ function NuevaRegla({ cuenta }: { cuenta: DetalleCuenta }) {
     setDesdeSiempre(cuenta.ultima_estrategia === null);
     setPrevia(null);
   }, [cuenta.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => setPrevia(null), [estrategia, parametros, desdeSiempre, desde]);
+  useEffect(() => setPrevia(null), [estrategia, parametros, desdeSiempre, desde, corregir]);
 
   const errores = useMemo(() => faltantes(estrategia, parametros), [estrategia, parametros]);
   const cuerpo = (soloPrevia: boolean) => ({
     estrategia, parametros: completar(estrategia, parametros), desde_siempre: desdeSiempre, desde: desdeSiempre ? null : desde, previa: soloPrevia,
+    corregir: !desdeSiempre && corregir,
   });
   const verPrevia = useMutation({
     mutationFn: () => api.post<ResumenReasignacion>(`/api/cuentas/${cuenta.id}/reglas`, cuerpo(true)),
@@ -185,7 +225,15 @@ function NuevaRegla({ cuenta }: { cuenta: DetalleCuenta }) {
       <div className="fila" style={{ alignItems: "end", gap: 16 }}>
         {cuenta.ultima_estrategia === null && <Marcador etiqueta="Vale desde siempre (también para lo anterior)" marcado={desdeSiempre} alCambiar={setDesdeSiempre} />}
         {!desdeSiempre && <div style={{ width: 200 }}><Texto etiqueta="Vigente desde (00:00, hora de España)" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></div>}
+        {!desdeSiempre && cuenta.ultima_estrategia !== null && (
+          <Marcador etiqueta="Corregir hacia atrás: reemplaza a las reglas que empiezan desde esa fecha" marcado={corregir} alCambiar={setCorregir} />
+        )}
       </div>
+      {corregir && !desdeSiempre && (
+        <Aviso tipo="info">
+          Para arreglar una regla que estaba mal: ponga la fecha desde la que tendría que haber valido. Las reglas que empezaban desde esa fecha quedan en el historial como «corregida, nunca rigió», y las llamadas y chats desde esa fecha se vuelven a asignar.
+        </Aviso>
+      )}
       {errores.length > 0 && <Aviso tipo="atencion">{errores.join(" ")}</Aviso>}
 
       {previa && (
