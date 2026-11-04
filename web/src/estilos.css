@@ -227,6 +227,10 @@ textarea.entrada { height: auto; padding: 8px 10px; resize: vertical; }
 .linea.actual { background: var(--fila-elegida); }
 .saltar { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 6px 0 3px; border: 1px solid #a0d5f8; border-radius: 5px; background: #fff; color: var(--primario); font-family: var(--mono); font-size: 12px; cursor: pointer; }
 .saltar:disabled { color: var(--secundario); border-color: var(--borde); cursor: default; }
+.quien { all: unset; font-weight: 700; cursor: pointer; border-radius: 4px; padding: 0 2px; align-self: start; }
+.quien:hover { text-decoration: underline dotted; background: var(--fila-elegida); }
+.quien:focus-visible { outline: 2px solid var(--foco); }
+.quien:disabled { cursor: progress; opacity: .7; }
 .quien-agente { color: var(--primario); }
 .quien-cliente { color: var(--etiqueta); }
 

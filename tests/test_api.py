@@ -214,6 +214,7 @@ def test_configuracion_de_transcripcion(con_sesion):
     inicial = con_sesion.get("/api/transcripcion/configuracion").json()
     assert inicial["proveedores"][0]["nombre"] == "openai"
     assert inicial["proveedores"][0]["clave_mascara"] == ""
+    assert "grúa privada" in inicial["frases_agente"]
 
     # Sin CloudTalk no hay audio que transcribir.
     con_sesion.put("/api/ajustes/general", json={"valores": {
@@ -224,6 +225,7 @@ def test_configuracion_de_transcripcion(con_sesion):
         "modelos": [{"proveedor": "openai", "modelo": "whisper-1", "precio_minuto": "0.006", "activo": True}],
         "principal": "openai:whisper-1",
         "tope_mensual_usd": 40,
+        "frases_agente": ["Grúas Pérez", " servicio de grúa "],
     }
     assert con_sesion.put("/api/transcripcion/configuracion", json=cambios, headers=CABECERA).status_code == 204
     guardada = con_sesion.get("/api/transcripcion/configuracion").json()
@@ -236,6 +238,7 @@ def test_configuracion_de_transcripcion(con_sesion):
     # Sin clave de Deepgram no hay a quién preguntarle los modelos.
     assert con_sesion.get("/api/transcripcion/proveedores/deepgram/modelos").status_code == 409
     assert guardada["tope_mensual_usd"] == 40
+    assert guardada["frases_agente"] == ["Grúas Pérez", "servicio de grúa"]
     assert guardada["proveedores"][0]["clave_mascara"].endswith("1234")
 
     resumen = con_sesion.get("/api/transcripcion/resumen").json()

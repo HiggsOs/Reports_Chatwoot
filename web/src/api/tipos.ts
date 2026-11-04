@@ -46,6 +46,8 @@ export interface Segmento { hablante: "agente" | "cliente" | "desconocido"; etiq
 export interface VersionTranscripcion {
   id: number; proveedor: string; modelo: string; canales_audio: string; segmentos: Segmento[];
   duracion_audio: number | null; costo_estimado: string | null; principal: boolean; creado_en: string;
+  // Para las voces sin resolver: cuál parece el agente según sus frases.
+  sugerencia: { etiqueta: string; frase: string } | null;
 }
 export interface OpcionModelo { clave: string; titulo: string; devuelve: string; costo_usd: number | null }
 export interface PedidoLlamada { id: number; estado: "pendiente" | "en_proceso" | "hecho" | "error"; intentos: number; error: string | null }
@@ -82,7 +84,7 @@ export interface CobrosTraidos { proveedor: string; titulo: string; ok: boolean;
 export interface ModeloDisponible { modelo: string; devuelve: string }
 export interface ConfiguracionTranscripcion {
   proveedores: Proveedor[]; modelos: ModeloTranscripcion[]; principal: string | null; respaldo: string[];
-  idioma: string; vocabulario: string[]; canal_agente: string; auto_min_segundos: number;
+  idioma: string; vocabulario: string[]; frases_agente: string[]; canal_agente: string; auto_min_segundos: number;
   tope_mensual_usd: number | null; aviso_porcentaje: number; confirmar_lote_usd: number | null;
 }
 

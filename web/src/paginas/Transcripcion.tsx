@@ -398,6 +398,7 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
   const [respaldo, setRespaldo] = useState<string[]>(configuracion.respaldo);
   const [idioma, setIdioma] = useState(configuracion.idioma);
   const [vocabulario, setVocabulario] = useState(configuracion.vocabulario.join(", "));
+  const [frasesAgente, setFrasesAgente] = useState(configuracion.frases_agente.join(", "));
   const [canal, setCanal] = useState(configuracion.canal_agente);
   const [auto, setAuto] = useState(configuracion.auto_min_segundos);
   const [tope, setTope] = useState(configuracion.tope_mensual_usd ? String(configuracion.tope_mensual_usd) : "");
@@ -434,7 +435,8 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
       })),
       principal: activos.includes(principal) ? principal : null,
       respaldo: respaldo.filter((r) => activos.includes(r) && r !== principal),
-      idioma, vocabulario: vocabulario.split(",").map((v) => v.trim()).filter(Boolean), canal_agente: canal,
+      idioma, vocabulario: vocabulario.split(",").map((v) => v.trim()).filter(Boolean),
+      frases_agente: frasesAgente.split(",").map((v) => v.trim()).filter(Boolean), canal_agente: canal,
       auto_min_segundos: auto, tope_mensual_usd: importe(tope), aviso_porcentaje: aviso, confirmar_lote_usd: importe(confirmar),
     }),
     onSuccess: () => { avisar("Configuración de transcripción guardada. La cola la usa desde su próximo ciclo."); cliente.invalidateQueries(); },
@@ -521,6 +523,8 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
         </div>
         <Texto etiqueta="Vocabulario (separado por comas)" value={vocabulario} onChange={(e) => setVocabulario(e.target.value)}
           ayuda="Nombres propios, marcas, productos: ayudan a escribirlos bien." />
+        <Texto etiqueta="Frases del agente (separadas por comas)" value={frasesAgente} onChange={(e) => setFrasesAgente(e.target.value)}
+          ayuda="Lo que dice el agente al atender («servicio de grúa», «grúa privada»…). Cuando el modelo separa las voces, la que dice estas frases queda como Agente. Sin importar acentos ni mayúsculas." />
       </Tarjeta>
 
       <Tarjeta padding style={{ display: "flex", flexDirection: "column", gap: 14 }}>

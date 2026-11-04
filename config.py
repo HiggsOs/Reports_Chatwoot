@@ -115,6 +115,8 @@ class Config(BaseModel):
     transcripcion_respaldo: tuple[str, ...] = ()
     transcripcion_idioma: str = "es"
     transcripcion_vocabulario: tuple[str, ...] = ()
+    # Frases del agente para reconocer su voz. Vacío: las de siempre.
+    transcripcion_frases_agente: tuple[str, ...] = ()
     # En una grabación estéreo, qué canal es el del agente.
     cloudtalk_canal_agente: str = "izquierdo"
     transcripcion_retencion_dias: int = TRANSCRIPCION_RETENCION_DIAS_POR_DEFECTO
@@ -263,6 +265,7 @@ def _transcripcion(entorno: Mapping[str, str]) -> dict:
         "transcripcion_respaldo": tuple(p.lower() for p in _lista(entorno, "TRANSCRIPCION_RESPALDO")),
         "transcripcion_idioma": (entorno.get("TRANSCRIPCION_IDIOMA") or "es").strip(),
         "transcripcion_vocabulario": _lista(entorno, "TRANSCRIPCION_VOCABULARIO"),
+        "transcripcion_frases_agente": _lista(entorno, "TRANSCRIPCION_FRASES_AGENTE"),
         "cloudtalk_canal_agente": canal,
         "transcripcion_retencion_dias": _entero_positivo(
             entorno, "TRANSCRIPCION_RETENCION_DIAS", TRANSCRIPCION_RETENCION_DIAS_POR_DEFECTO

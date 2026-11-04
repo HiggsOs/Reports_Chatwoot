@@ -3,6 +3,7 @@
 import json
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from panel.db.modelos import Llamada
 from panel.transcripcion import consultas, registro
 from panel.transcripcion.base import TranscripcionError, TranscripcionNoDisponible
 from panel.transcripcion.estrategias.openai import MODELO_POR_DEFECTO
+from panel.transcripcion.hablantes import FRASES_AGENTE_POR_DEFECTO
 from panel.transcripcion.servicio import ServicioTranscripcion, VistaTranscripcion
 
 router = APIRouter(prefix="/api", tags=["transcripción"])
@@ -122,6 +124,27 @@ class Hablantes(BaseModel):
 def asignar_hablantes(transcripcion_id: int, datos: Hablantes, c: Contenedor = Depends(contenedor)) -> None:
     roles = {e: ("agente" if e == datos.agente else "cliente") for e in datos.etiquetas}
     _servicio(c).asignar_hablantes(transcripcion_id, roles)
+
+
+class HablanteFrase(BaseModel):
+    hablante: Literal["agente", "cliente"]
+
+
+@router.put("/transcripciones/{transcripcion_id}/segmentos/{indice}/hablante", status_code=204)
+def cambiar_hablante(
+    transcripcion_id: int, indice: int, datos: HablanteFrase, c: Contenedor = Depends(contenedor)
+) -> None:
+    """Corrige quién dijo una frase."""
+    try:
+        _servicio(c).cambiar_hablante(transcripcion_id, indice, datos.hablante)
+    except IndexError as error:
+        raise HTTPException(404, str(error)) from error
+
+
+@router.post("/transcripciones/{transcripcion_id}/intercambiar", status_code=204)
+def intercambiar_hablantes(transcripcion_id: int, c: Contenedor = Depends(contenedor)) -> None:
+    """Lo del agente pasa a ser del cliente y al revés."""
+    _servicio(c).intercambiar_hablantes(transcripcion_id)
 
 
 class Lote(BaseModel):
@@ -399,6 +422,7 @@ class ConfiguracionTranscripcion(BaseModel):
     respaldo: list[str]
     idioma: str
     vocabulario: list[str]
+    frases_agente: list[str]
     canal_agente: str
     auto_min_segundos: int
     tope_mensual_usd: float | None
@@ -452,6 +476,7 @@ def ver_configuracion(c: Contenedor = Depends(contenedor)) -> ConfiguracionTrans
         respaldo=[r for r in (registro.resolver(n, activos) for n in cfg.transcripcion_respaldo) if r],
         idioma=cfg.transcripcion_idioma,
         vocabulario=list(cfg.transcripcion_vocabulario),
+        frases_agente=list(cfg.transcripcion_frases_agente or FRASES_AGENTE_POR_DEFECTO),
         canal_agente=cfg.cloudtalk_canal_agente,
         auto_min_segundos=cfg.transcripcion_auto_min_segundos,
         tope_mensual_usd=_f(cfg.transcripcion_tope_mensual_usd),
@@ -466,6 +491,7 @@ class CambiosTranscripcion(BaseModel):
     respaldo: list[str] = []
     idioma: str = "es"
     vocabulario: list[str] = []
+    frases_agente: list[str] = []
     canal_agente: str = "izquierdo"
     auto_min_segundos: int = 0
     tope_mensual_usd: float | None = None
@@ -499,6 +525,7 @@ def guardar_configuracion(datos: CambiosTranscripcion, c: Contenedor = Depends(c
         "TRANSCRIPCION_RESPALDO": ",".join(r for r in datos.respaldo if r in activos and r != datos.principal),
         "TRANSCRIPCION_IDIOMA": datos.idioma.strip(),
         "TRANSCRIPCION_VOCABULARIO": ",".join(p.strip() for p in datos.vocabulario if p.strip()),
+        "TRANSCRIPCION_FRASES_AGENTE": ",".join(p.strip() for p in datos.frases_agente if p.strip()),
         "CLOUDTALK_CANAL_AGENTE": datos.canal_agente,
         "TRANSCRIPCION_AUTO_MIN_SEGUNDOS": str(datos.auto_min_segundos),
         "TRANSCRIPCION_TOPE_MENSUAL_USD": _importe(datos.tope_mensual_usd),

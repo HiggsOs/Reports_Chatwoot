@@ -33,6 +33,7 @@ from panel.transcripcion.base import (
     OpcionesTranscripcion,
     TranscripcionNoDisponible,
 )
+from panel.transcripcion.hablantes import FRASES_AGENTE_POR_DEFECTO
 from panel.transcripcion.servicio import ServicioTranscripcion
 
 
@@ -117,7 +118,9 @@ def servicio_transcripcion(
         estrategias,
         cadena,
         OpcionesTranscripcion(
-            idioma=cfg.transcripcion_idioma, vocabulario=cfg.transcripcion_vocabulario
+            idioma=cfg.transcripcion_idioma,
+            vocabulario=cfg.transcripcion_vocabulario,
+            frases_agente=cfg.transcripcion_frases_agente or FRASES_AGENTE_POR_DEFECTO,
         ),
         cfg.cloudtalk_canal_agente,
     )

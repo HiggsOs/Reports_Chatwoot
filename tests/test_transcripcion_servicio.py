@@ -75,6 +75,37 @@ def test_mono_queda_con_hablantes_por_resolver(fabrica, almacen):
         assert (llamada.transcripcion_estado, llamada.audio_estado) == ("transcrita", "guardado")
 
 
+def test_el_agente_se_reconoce_por_sus_frases(fabrica, almacen):
+    from panel.transcripcion.hablantes import FRASES_AGENTE_POR_DEFECTO
+
+    llamada_id = guardar_llamada(fabrica)
+    transcripcion = servicio(fabrica, almacen)
+    transcripcion._opciones = OpcionesTranscripcion(idioma="es", frases_agente=FRASES_AGENTE_POR_DEFECTO)
+    transcripcion.transcribir(llamada_id)
+    vista = transcripcion.de_llamada(llamada_id)[0]
+    # La falsa dice «Buenos días, servicio de grúas.» (A) y «Necesito una grúa.» (B).
+    assert [s.hablante for s in vista.segmentos] == ["agente", "cliente"]
+    assert vista.etiquetas_sin_resolver == [] and vista.sugerencia is None
+
+
+def test_corregir_una_frase_e_intercambiar(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    transcripcion = servicio(fabrica, almacen)
+    resultado = transcripcion.transcribir(llamada_id)
+    # Sin frases configuradas queda sin resolver, pero se sugiere con las de una versión vieja.
+    transcripcion._opciones = OpcionesTranscripcion(idioma="es", frases_agente=("servicio de grúas",))
+    vista = transcripcion.de_llamada(llamada_id)[0]
+    assert vista.sugerencia.etiqueta == "A" and vista.sugerencia.frase == "Buenos días, servicio de grúas."
+
+    transcripcion.cambiar_hablante(resultado.transcripcion_id, 1, "cliente")
+    transcripcion.cambiar_hablante(resultado.transcripcion_id, 0, "agente")
+    assert [s.hablante for s in transcripcion.de_llamada(llamada_id)[0].segmentos] == ["agente", "cliente"]
+    transcripcion.intercambiar_hablantes(resultado.transcripcion_id)
+    assert [s.hablante for s in transcripcion.de_llamada(llamada_id)[0].segmentos] == ["cliente", "agente"]
+    with pytest.raises(IndexError):
+        transcripcion.cambiar_hablante(resultado.transcripcion_id, 5, "agente")
+
+
 def test_decir_quien_es_quien(fabrica, almacen):
     llamada_id = guardar_llamada(fabrica)
     transcripcion = servicio(fabrica, almacen)

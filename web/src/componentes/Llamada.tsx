@@ -158,6 +158,17 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
     }
     cliente.invalidateQueries({ queryKey: ["transcripcion-resumen"] });
   }, [pedido, cliente, avisar]);
+  const cambiarFrase = useMutation({
+    mutationFn: ({ indice, hablante }: { indice: number; hablante: "agente" | "cliente" }) =>
+      api.put(`/api/transcripciones/${version!.id}/segmentos/${indice}/hablante`, { hablante }),
+    onSuccess: refrescar,
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  const intercambiar = useMutation({
+    mutationFn: () => api.post(`/api/transcripciones/${version!.id}/intercambiar`),
+    onSuccess: () => { refrescar(); avisar("Agente y cliente intercambiados."); },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
   const principal = useMutation({
     mutationFn: (id: number) => api.post(`/api/transcripciones/${id}/principal`),
     onSuccess: () => { refrescar(); avisar("Ahora es la versión principal."); },
@@ -198,12 +209,22 @@ function Transcripcion({ llamadaId, segundo, alSaltar }: { llamadaId: number; se
                     <Icono nombre="play_arrow" relleno tamano={14} />{duracion(s.inicio)}
                   </button>
                 ) : <span />}
-                <b className={s.hablante === "agente" ? "quien-agente" : "quien-cliente"}>{quien(s)}</b>
+                <button type="button" className={`quien ${s.hablante === "agente" ? "quien-agente" : "quien-cliente"}`}
+                  title={`Cambiar a ${s.hablante === "agente" ? "Cliente" : "Agente"}`} aria-label={`${quien(s)}: cambiar a ${s.hablante === "agente" ? "Cliente" : "Agente"}`}
+                  disabled={cambiarFrase.isPending} onClick={() => cambiarFrase.mutate({ indice: i, hablante: s.hablante === "agente" ? "cliente" : "agente" })}>
+                  {quien(s)}
+                </button>
                 <span>{s.texto}</span>
               </div>
             ))}
           </div>
           <QuienEsQuien version={version} alGuardar={refrescar} />
+          {version.segmentos.some((s) => s.hablante === "agente" || s.hablante === "cliente") && (
+            <div className="fila" style={{ gap: 8 }}>
+              <Boton chico icono="swap_horiz" cargando={intercambiar.isPending} onClick={() => intercambiar.mutate()}>Intercambiar agente y cliente</Boton>
+              <span className="cap">Para corregir una sola frase, haga clic en el nombre de quien habla.</span>
+            </div>
+          )}
           {!version.principal && (
             <div><Boton chico icono="star" cargando={principal.isPending} onClick={() => principal.mutate(version.id)}>Usar esta como principal</Boton></div>
           )}
@@ -237,13 +258,16 @@ function enCurso(pedido: PedidoLlamada | null | undefined): boolean {
   return pedido?.estado === "pendiente" || pedido?.estado === "en_proceso";
 }
 
+// El motivo ya puede terminar en punto: no se repite.
+const sinPunto = (texto: string | null) => (texto ?? "").trim().replace(/\.+$/, "");
+
 function EstadoPedido({ pedido }: { pedido: PedidoLlamada }) {
   if (pedido.estado === "en_proceso") return <Aviso tipo="info">Transcribiendo… puede tardar un minuto. Puede seguir trabajando: el pedido está en Transcripción › Cola.</Aviso>;
   if (pedido.estado === "pendiente")
     return pedido.error
-      ? <Aviso tipo="atencion">Falló el intento {pedido.intentos}: {pedido.error}. Se reintenta en la próxima sincronización.</Aviso>
+      ? <Aviso tipo="atencion">Falló el intento {pedido.intentos}: {sinPunto(pedido.error)}. Se reintenta en la próxima sincronización.</Aviso>
       : <Aviso tipo="info">En la cola de transcripción. Empieza en unos segundos.</Aviso>;
-  return <Aviso tipo="error">La transcripción falló tras {pedido.intentos} intentos: {pedido.error || "sin motivo registrado"}. Se puede reintentar desde aquí o desde Transcripción › Cola.</Aviso>;
+  return <Aviso tipo="error">La transcripción falló tras {pedido.intentos} intentos: {sinPunto(pedido.error) || "sin motivo registrado"}. Se puede reintentar desde aquí o desde Transcripción › Cola.</Aviso>;
 }
 
 function QuienEsQuien({ version, alGuardar }: { version: VersionTranscripcion; alGuardar: () => void }) {
@@ -251,21 +275,33 @@ function QuienEsQuien({ version, alGuardar }: { version: VersionTranscripcion; a
     () => [...new Set(version.segmentos.filter((s) => s.hablante === "desconocido" && s.etiqueta).map((s) => s.etiqueta!))].sort(),
     [version],
   );
-  const [agente, setAgente] = useState(etiquetas[0] ?? "");
+  const sugerida = version.sugerencia?.etiqueta;
+  const [agente, setAgente] = useState(sugerida ?? etiquetas[0] ?? "");
+  useEffect(() => setAgente(sugerida ?? etiquetas[0] ?? ""), [version.id, sugerida]); // eslint-disable-line react-hooks/exhaustive-deps
   const avisar = useAvisos();
   const guardar = useMutation({
     mutationFn: () => api.post(`/api/transcripciones/${version.id}/hablantes`, { agente, etiquetas }),
     onSuccess: () => { avisar("Hablantes guardados."); alGuardar(); },
+    onError: (e) => avisar((e as Error).message, "error"),
   });
   if (etiquetas.length === 0) return null;
+  if (etiquetas.length === 1)
+    return (
+      <Aviso tipo="atencion">
+        El modelo no logró separar las voces: todo quedó como «Hablante {etiquetas[0]}». Marque quién habla haciendo clic en el nombre de cada frase (cada clic alterna entre Agente y Cliente), o transcriba de nuevo con otro modelo.
+      </Aviso>
+    );
   return (
     <Aviso tipo="atencion">
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span>Esta versión separó las voces, pero no sabe quién es quién.</span>
+        {version.sugerencia && (
+          <span>Parece que el agente es el <b>Hablante {version.sugerencia.etiqueta}</b>: dijo «{version.sugerencia.frase}».</span>
+        )}
         <div className="fila" role="radiogroup" aria-label="¿Quién es el agente?">
           <b>¿Quién es el agente?</b>
           {etiquetas.map((e) => (
-            <label key={e} className="marcador"><input type="radio" name={`agente-${version.id}`} checked={agente === e} onChange={() => setAgente(e)} />Hablante {e}</label>
+            <label key={e} className="marcador"><input type="radio" name={`agente-${version.id}`} checked={agente === e} onChange={() => setAgente(e)} />Hablante {e}{e === sugerida ? " (sugerido)" : ""}</label>
           ))}
           <Boton chico cargando={guardar.isPending} onClick={() => guardar.mutate()}>Guardar</Boton>
         </div>
