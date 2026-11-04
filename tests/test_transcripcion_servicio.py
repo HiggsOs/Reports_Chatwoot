@@ -140,6 +140,49 @@ def test_si_fallan_todas_dice_por_que(fabrica, almacen):
         assert sesion.get(Llamada, llamada_id).transcripcion_estado is None
 
 
+class EstrategiaQueExplota(EstrategiaFalsa):
+    """Falla con una excepción que no es TranscripcionError (un bug, una
+    respuesta rara del proveedor)."""
+
+    def transcribir(self, audio, opciones):
+        raise KeyError("segments")
+
+
+def test_un_error_inesperado_dice_el_motivo_y_prueba_el_respaldo(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    solo_rota = servicio(fabrica, almacen, estrategias={"rota": EstrategiaQueExplota()})
+    resultado = solo_rota.transcribir(llamada_id)
+    assert resultado.transcripcion_id is None
+    assert "KeyError" in resultado.error and "segments" in resultado.error
+
+    estrategias = {"rota": EstrategiaQueExplota(), "buena": EstrategiaFalsa()}
+    resultado = servicio(fabrica, almacen, estrategias=estrategias).transcribir(llamada_id)
+    assert resultado.proveedor == "buena" and resultado.error is None
+
+
+def test_si_no_se_puede_preparar_el_audio_dice_por_que(fabrica, almacen, monkeypatch):
+    llamada_id = guardar_llamada(fabrica)
+
+    def sin_ffmpeg(*_args, **_kwargs):
+        raise RuntimeError("Falta ffmpeg en el sistema.")
+
+    monkeypatch.setattr("panel.transcripcion.preparacion.preparar", sin_ffmpeg)
+    resultado = servicio(fabrica, almacen).transcribir(llamada_id)
+    assert resultado.error == "No se pudo preparar el audio: RuntimeError: Falta ffmpeg en el sistema."
+
+
+def test_la_cola_guarda_el_motivo_de_un_error_inesperado(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    transcripcion = servicio(fabrica, almacen, estrategias={"rota": EstrategiaQueExplota()})
+    transcripcion.encolar([llamada_id])
+
+    for _ in range(3):
+        transcripcion.procesar_cola(5)
+    with unidad_de_trabajo(fabrica) as sesion:
+        trabajo = sesion.scalar(select(TrabajoTranscripcion))
+        assert trabajo.estado == "error" and "KeyError" in trabajo.error
+
+
 def test_sin_audio_no_se_transcribe(fabrica, almacen):
     llamada_id = guardar_llamada(fabrica, grabada=False)
     resultado = servicio(fabrica, almacen).transcribir(llamada_id)

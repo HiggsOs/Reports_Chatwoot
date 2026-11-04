@@ -88,6 +88,12 @@ class ResumenRetencionTranscripciones(BaseModel):
     borradas: int = 0
 
 
+def _motivo(error: BaseException) -> str:
+    """El tipo y el mensaje, para que nunca quede un error en blanco."""
+    texto = str(error).strip()
+    return f"{type(error).__name__}: {texto}" if texto else type(error).__name__
+
+
 def _ordenar(segmentos: list[Segmento]) -> list[Segmento]:
     # Estable: sin marcas de tiempo se conserva el orden en que llegaron.
     return sorted(segmentos, key=lambda s: (s.inicio is None, s.inicio or 0.0))
@@ -131,6 +137,15 @@ class ServicioTranscripcion:
     # --- Transcribir ---------------------------------------------------------
 
     def transcribir(self, llamada_id: int, proveedor: str | None = None) -> ResultadoTranscripcion:
+        """Nunca lanza: cualquier falla vuelve en `error` con su motivo, para
+        que el panel y la cola puedan mostrarlo."""
+        try:
+            return self._transcribir(llamada_id, proveedor)
+        except Exception as error:  # noqa: BLE001 - el motivo tiene que llegar al panel
+            registro.exception("Falló la transcripción de la llamada %s", llamada_id)
+            return ResultadoTranscripcion(error=f"Error inesperado: {_motivo(error)}")
+
+    def _transcribir(self, llamada_id: int, proveedor: str | None) -> ResultadoTranscripcion:
         if proveedor:
             # Un pedido viejo puede nombrar solo el proveedor («openai»).
             elegido = registro_transcripcion.resolver(proveedor, self.estrategias)
@@ -148,19 +163,27 @@ class ServicioTranscripcion:
 
         with unidad_de_trabajo(self._fabrica) as sesion:
             nombre = f"{sesion.get(Llamada, llamada_id).id_externo}.mp3"
-        plan = preparacion.preparar(audio.mp3, nombre, self._canal_agente)
+        try:
+            plan = preparacion.preparar(audio.mp3, nombre, self._canal_agente)
+        except Exception as error:  # noqa: BLE001
+            registro.exception("No se pudo preparar el audio de la llamada %s", llamada_id)
+            return ResultadoTranscripcion(error=f"No se pudo preparar el audio: {_motivo(error)}")
 
         errores = []
         for nombre_estrategia in cadena:
             estrategia = self.estrategias[nombre_estrategia]
-            plan_usado = plan
-            if plan.necesita_marcas and not estrategia.capacidades.marcas_de_tiempo:
-                plan_usado = preparacion.como_mono(plan, audio.mp3, nombre)
             try:
+                plan_usado = plan
+                if plan.necesita_marcas and not estrategia.capacidades.marcas_de_tiempo:
+                    plan_usado = preparacion.como_mono(plan, audio.mp3, nombre)
                 segmentos, costo = self._transcribir_plan(estrategia, plan_usado)
             except TranscripcionError as error:
                 registro.warning("Falló %s en la llamada %s: %s", nombre_estrategia, llamada_id, error)
                 errores.append(f"{estrategia.titulo}: {error}")
+                continue
+            except Exception as error:  # noqa: BLE001 - un error raro no corta el respaldo
+                registro.exception("Error inesperado de %s en la llamada %s", nombre_estrategia, llamada_id)
+                errores.append(f"{estrategia.titulo}: error inesperado: {_motivo(error)}")
                 continue
             transcripcion_id = self._guardar(llamada_id, estrategia, plan_usado, segmentos, costo)
             return ResultadoTranscripcion(transcripcion_id=transcripcion_id, proveedor=nombre_estrategia)
