@@ -270,3 +270,69 @@ def test_el_frontend_responde_cualquier_ruta(cliente):
     assert cliente.get("/llamadas").text == "<html>panel</html>"
     assert cliente.get("/api/no-existe").status_code == 404
     assert cliente.get("/api/salud").json() == {"ok": True}
+
+
+class ChatwootFalso:
+    """Lo mínimo que usa `reporte.generar_filas`."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
+    def listar_conversaciones(self, _desde, _hasta):
+        ahora = int(datetime.now(timezone.utc).timestamp())
+        return [
+            {"id": 1, "status": "open", "created_at": ahora, "inbox_id": 3, "labels": ["grua"],
+             "meta": {"assignee": {"name": "Ana", "email": "ana@x.es"}}},
+            {"id": 2, "status": "open", "created_at": ahora, "inbox_id": 3, "labels": [],
+             "meta": {"assignee": {"name": "Luis", "email": "luis@x.es"}}},
+        ]
+
+    def listar_inboxes(self):
+        return {3: "WhatsApp"}
+
+    def listar_mensajes(self, _conversacion_id):
+        return [{"message_type": 0, "content": "Hola"}]
+
+
+def _esperar_reporte(cliente, trabajo_id):
+    import time
+
+    for _ in range(100):
+        estado = cliente.get(f"/api/reportes/chatwoot/{trabajo_id}").json()
+        if estado["estado"] != "en_curso":
+            return estado
+        time.sleep(0.05)
+    raise AssertionError("El reporte no terminó.")
+
+
+def test_reporte_chatwoot_sin_conectar(con_sesion):
+    rango = {"desde": "2026-11-01", "hasta": "2026-11-04"}
+    assert con_sesion.post("/api/reportes/chatwoot", json=rango, headers=CABECERA).status_code == 409
+
+
+def test_reporte_chatwoot(entorno, datos, tmp_path, monkeypatch):
+    from api.rutas import reportes
+
+    monkeypatch.setattr(reportes, "ClienteChatwoot", ChatwootFalso)
+    entorno = {**entorno, "CHATWOOT_BASE_URL": "https://chat.x.es", "CHATWOOT_ACCOUNT_ID": "1",
+               "CHATWOOT_API_TOKEN": "t", "DATA_DIR": str(tmp_path)}
+    with TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web")) as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        invertido = cliente.post("/api/reportes/chatwoot", json={"desde": "2026-11-04", "hasta": "2026-11-01"},
+                                 headers=CABECERA)
+        assert invertido.status_code == 422
+        hoy = date.today().isoformat()
+        respuesta = cliente.post("/api/reportes/chatwoot", json={"desde": hoy, "hasta": hoy}, headers=CABECERA)
+        assert respuesta.status_code == 200
+        trabajo_id = respuesta.json()["id"]
+
+        estado = _esperar_reporte(cliente, trabajo_id)
+        assert estado["estado"] == "listo"
+        assert [f["area"] for f in estado["filas"]] == ["Comercial", "SIN_MAPEAR"]
+        assert estado["sin_mapear"] == ["luis@x.es"]
+
+        csv = cliente.get(f"/api/reportes/chatwoot/{trabajo_id}/csv")
+        assert csv.status_code == 200
+        assert f"reporte-chatwoot-{hoy}-a-{hoy}.csv" in csv.headers["content-disposition"]
+        assert csv.content.decode("utf-8-sig").splitlines()[0].startswith("conversacion_id,asesor")
+        assert cliente.get("/api/reportes/chatwoot/no-existe").status_code == 404

@@ -16,7 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from api import seguridad
 from api.contenedor import Contenedor
-from api.rutas import ajustes, asesores, cuentas, inicio, interacciones, transcripcion
+from api.rutas import ajustes, asesores, cuentas, inicio, interacciones, reportes, transcripcion
 
 registro = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ def crear_app(contenedor: Contenedor | None = None, web: Path = WEB) -> FastAPI:
     app = FastAPI(title="Panel de calidad", docs_url=None, redoc_url=None, openapi_url="/api/openapi.json")
     app.state.contenedor = contenedor
     app.state.intentos = seguridad.Intentos()
+    app.state.reportes = reportes.Reportes()
     app.add_middleware(
         SessionMiddleware,
         secret_key=contenedor.base.cookie_key,
@@ -53,7 +54,7 @@ def crear_app(contenedor: Contenedor | None = None, web: Path = WEB) -> FastAPI:
     def salud() -> dict:
         return {"ok": True}
 
-    for modulo in (seguridad, inicio, interacciones, transcripcion, ajustes, cuentas, asesores):
+    for modulo in (seguridad, inicio, interacciones, transcripcion, ajustes, cuentas, asesores, reportes):
         app.include_router(modulo.router)
 
     @app.api_route("/api/{_resto:path}", methods=["GET", "POST", "PUT", "DELETE"], include_in_schema=False)
