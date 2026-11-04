@@ -73,11 +73,13 @@ tres grupos.
 
 **Reportes en vivo** (consultan las APIs en el momento, como antes de la base):
 
-- **Reporte de Chatwoot**: elegir *Desde* y *Hasta*, *Generar reporte* y
-  descargar el CSV.
-- **Transcripciones de Ringover**: mismo flujo. Solo pide datos si está
+- **Reporte de Chatwoot** (también en el panel nuevo, grupo *Reportes*):
+  elegir *Desde* y *Hasta*, *Generar reporte* y descargar el CSV con una fila
+  por conversación. Corre en el servidor y muestra el avance; los últimos 5
+  reportes quedan disponibles para descargar hasta que se reinicia el servicio.
+- **Transcripciones de Ringover** (solo en la versión Streamlit): mismo flujo. Solo pide datos si está
   configurado `RINGOVER_API_TOKEN`.
-- **Transcripciones de CloudTalk**: mismo flujo. Solo pide datos si están
+- **Transcripciones de CloudTalk** (solo en la versión Streamlit): mismo flujo. Solo pide datos si están
   configurados `CLOUDTALK_API_KEY_ID` y `CLOUDTALK_API_KEY_SECRET`.
 
 Al abrir el panel por una dirección directa (por ejemplo `/llamadas`) se entra

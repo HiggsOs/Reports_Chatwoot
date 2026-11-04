@@ -7,7 +7,7 @@ export interface EntradaPagina { seccion: string; titulo: string; ruta: string; 
 
 const perezosa = (cargar: () => Promise<{ default: ComponentType }>) => lazy(cargar);
 
-export const SECCIONES = ["Operación", "Configuración"] as const;
+export const SECCIONES = ["Operación", "Reportes", "Configuración"] as const;
 
 export const PAGINAS: EntradaPagina[] = [
   { seccion: "Operación", titulo: "Inicio", ruta: "inicio", icono: "home", Componente: perezosa(() => import("./Inicio")) },
@@ -15,6 +15,7 @@ export const PAGINAS: EntradaPagina[] = [
   { seccion: "Operación", titulo: "Llamadas", ruta: "llamadas", icono: "call", Componente: perezosa(() => import("./Llamadas")) },
   { seccion: "Operación", titulo: "Conversaciones", ruta: "conversaciones", icono: "chat", Componente: perezosa(() => import("./Conversaciones")) },
   { seccion: "Operación", titulo: "Historial del cliente", ruta: "historial", icono: "history", Componente: perezosa(() => import("./Historial")) },
+  { seccion: "Reportes", titulo: "Reporte de Chatwoot", ruta: "reporte-chatwoot", icono: "forum", Componente: perezosa(() => import("./ReporteChatwoot")) },
   { seccion: "Configuración", titulo: "General", ruta: "general", icono: "settings", Componente: perezosa(() => import("./General")) },
   { seccion: "Configuración", titulo: "Asesores", ruta: "asesores", icono: "group", Componente: perezosa(() => import("./Asesores")) },
   { seccion: "Configuración", titulo: "Cuentas", ruta: "cuentas", icono: "account_tree", Componente: perezosa(() => import("./Cuentas")) },
