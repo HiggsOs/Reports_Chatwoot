@@ -50,6 +50,14 @@ def crear_app(contenedor: Contenedor | None = None, web: Path = WEB) -> FastAPI:
             status_code=503,
         )
 
+    @app.exception_handler(Exception)
+    async def error_inesperado(request: Request, error: Exception):
+        # Sin esto el panel solo ve «El servidor respondió 500.», sin el motivo.
+        registro.exception("Error inesperado en %s %s", request.method, request.url.path)
+        texto = str(error).strip()
+        motivo = f"{type(error).__name__}: {texto}" if texto else type(error).__name__
+        return JSONResponse({"detail": f"Error inesperado: {motivo}"}, status_code=500)
+
     @app.get("/api/salud", include_in_schema=False)
     def salud() -> dict:
         return {"ok": True}

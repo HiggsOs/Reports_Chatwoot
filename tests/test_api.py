@@ -336,3 +336,18 @@ def test_reporte_chatwoot(entorno, datos, tmp_path, monkeypatch):
         assert f"reporte-chatwoot-{hoy}-a-{hoy}.csv" in csv.headers["content-disposition"]
         assert csv.content.decode("utf-8-sig").splitlines()[0].startswith("conversacion_id,asesor")
         assert cliente.get("/api/reportes/chatwoot/no-existe").status_code == 404
+
+
+
+def test_un_error_inesperado_llega_con_su_motivo(entorno, datos, tmp_path, monkeypatch):
+    from api.rutas import inicio
+
+    def explota(*_args, **_kwargs):
+        raise ValueError("dato raro")
+
+    monkeypatch.setattr(inicio.consultas, "resumen", explota)
+    with TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web"), raise_server_exceptions=False) as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        respuesta = cliente.get("/api/inicio")
+    assert respuesta.status_code == 500
+    assert respuesta.json()["detail"] == "Error inesperado: ValueError: dato raro"
