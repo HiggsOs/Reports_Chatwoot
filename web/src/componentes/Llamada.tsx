@@ -60,11 +60,14 @@ export function PanelLlamada({ llamadaId, retencionDias }: { llamadaId: number; 
   const [total, setTotal] = useState(0);
   const [sonando, setSonando] = useState(false);
 
-  const saltar = (s: number) => {
+  // `reproducir`: al saltar desde una frase de la transcripción empieza a
+  // sonar; con los botones o la barra se respeta si estaba en pausa.
+  const saltar = (s: number, reproducir = true) => {
     const el = reproductor.current;
-    if (!el) return;
+    if (!el || !Number.isFinite(s)) return;
     el.currentTime = s;
-    void el.play();
+    setSegundo(s);
+    if (reproducir) void el.play();
   };
 
   return (
@@ -84,29 +87,48 @@ export function PanelLlamada({ llamadaId, retencionDias }: { llamadaId: number; 
               onLoadedMetadata={(e) => setTotal(e.currentTarget.duration)}
               onPlay={() => setSonando(true)} onPause={() => setSonando(false)} onEnded={() => setSonando(false)} />
             <div className="reproductor">
+              <button type="button" className="boton solo-icono" aria-label="Retroceder 10 segundos" title="Retroceder 10 s"
+                onClick={() => saltar(Math.max(0, segundo - 10), false)}>
+                <Icono nombre="replay_10" />
+              </button>
               <button type="button" className="play" aria-label={sonando ? "Pausa" : "Reproducir"}
                 onClick={() => (sonando ? reproductor.current?.pause() : reproductor.current?.play())}>
                 <Icono nombre={sonando ? "pause" : "play_arrow"} relleno />
               </button>
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                <div className="barra-audio" role="slider" aria-label="Posición del audio" aria-valuemin={0} aria-valuemax={Math.round(total)} aria-valuenow={Math.round(segundo)}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "ArrowRight") saltar(Math.min(total, segundo + 5));
-                    if (e.key === "ArrowLeft") saltar(Math.max(0, segundo - 5));
-                  }}
-                  onClick={(e) => {
-                    const caja = e.currentTarget.getBoundingClientRect();
-                    saltar(((e.clientX - caja.left) / caja.width) * total);
-                  }}>
-                  <span style={{ width: `${total ? (segundo / total) * 100 : 0}%` }} />
-                </div>
-                <span className="mono cap">{duracion(segundo)} / {duracion(total)}</span>
+              <button type="button" className="boton solo-icono" aria-label="Avanzar 10 segundos" title="Avanzar 10 s"
+                onClick={() => saltar(Math.min(total, segundo + 10), false)}>
+                <Icono nombre="forward_10" />
+              </button>
+              <span className="mono cap" style={{ minWidth: 42, textAlign: "right" }}>{duracion(segundo)}</span>
+              <div className="barra-audio" role="slider" aria-label="Posición del audio" aria-valuemin={0} aria-valuemax={Math.round(total)}
+                aria-valuenow={Math.round(segundo)} aria-valuetext={`${duracion(segundo)} de ${duracion(total)}`} tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight") saltar(Math.min(total, segundo + 5), false);
+                  if (e.key === "ArrowLeft") saltar(Math.max(0, segundo - 5), false);
+                }}
+                onPointerDown={(e) => {
+                  // Clic o arrastre: mueve a ese punto.
+                  const barra = e.currentTarget;
+                  const mover = (x: number) => {
+                    const caja = barra.getBoundingClientRect();
+                    saltar(Math.min(1, Math.max(0, (x - caja.left) / caja.width)) * total, false);
+                  };
+                  barra.setPointerCapture(e.pointerId);
+                  mover(e.clientX);
+                  barra.onpointermove = (ev) => mover(ev.clientX);
+                  barra.onpointerup = () => { barra.onpointermove = null; barra.onpointerup = null; };
+                }}>
+                <span className="relleno" style={{ width: `${total ? (segundo / total) * 100 : 0}%` }} />
+                <span className="tirador" style={{ left: `${total ? (segundo / total) * 100 : 0}%` }} />
               </div>
+              <span className="mono cap" style={{ minWidth: 42 }}>{duracion(total)}</span>
               <select className="entrada" style={{ width: 80 }} aria-label="Velocidad" defaultValue="1"
                 onChange={(e) => { if (reproductor.current) reproductor.current.playbackRate = Number(e.target.value); }}>
                 {["1", "1.25", "1.5", "2"].map((v) => <option key={v} value={v}>{v.replace(".", ",")}×</option>)}
               </select>
+              <a className="boton solo-icono" href={audio.url} download={`llamada-${llamadaId}.mp3`} title="Descargar el audio (MP3)" aria-label="Descargar el audio (MP3)">
+                <Icono nombre="download" tamano={18} />
+              </a>
             </div>
             {audio.mensaje && <span className="ayuda">{audio.mensaje}</span>}
           </>

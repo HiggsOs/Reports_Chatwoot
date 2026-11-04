@@ -74,6 +74,56 @@ def _numero(valor) -> float | None:
         return None
 
 
+# Una pausa más larga que esto abre otra frase aunque siga la misma voz.
+PAUSA_NUEVA_FRASE_S = 1.5
+
+
+def _segmentos_por_palabra(resultados: dict) -> list[Segmento]:
+    """Las frases armadas con el hablante de cada palabra.
+
+    Deepgram da un solo hablante por `utterance`, y una utterance se corta por
+    pausas: en una llamada donde agente y cliente hablan sin pausa, una sola
+    utterance mezcla las dos voces y queda entera a nombre de una. Cada
+    palabra, en cambio, trae su hablante: se agrupan las seguidas de la misma
+    voz. Si hay una sola voz, se corta además en cada oración. Vacío si las
+    palabras no traen hablante (entonces valen las utterances)."""
+    canales = resultados.get("channels") or [{}]
+    alternativas = canales[0].get("alternatives") or [{}]
+    palabras = alternativas[0].get("words") or []
+    if not palabras or all(p.get("speaker") is None for p in palabras):
+        return []
+    # Si Deepgram oyó una sola voz, cada oración va aparte: así el auditor
+    # puede marcar quién dijo cada una (un bloque mezclaría a los dos).
+    una_sola_voz = len({p.get("speaker") for p in palabras}) == 1
+    segmentos: list[Segmento] = []
+    actual: dict | None = None
+
+    def cerrar():
+        if actual and actual["textos"]:
+            segmentos.append(Segmento(
+                hablante="desconocido", etiqueta=actual["etiqueta"], inicio=actual["inicio"],
+                fin=actual["fin"], texto=" ".join(actual["textos"]),
+            ))
+
+    for palabra in palabras:
+        texto = str(palabra.get("punctuated_word") or palabra.get("word") or "").strip()
+        if not texto:
+            continue
+        etiqueta = _etiqueta(palabra.get("speaker"))
+        inicio, fin = _numero(palabra.get("start")), _numero(palabra.get("end"))
+        pausa = (inicio - actual["fin"]) if actual and inicio is not None and actual["fin"] is not None else 0
+        if actual is None or etiqueta != actual["etiqueta"] or pausa > PAUSA_NUEVA_FRASE_S:
+            cerrar()
+            actual = {"etiqueta": etiqueta, "inicio": inicio, "fin": fin, "textos": []}
+        actual["textos"].append(texto)
+        actual["fin"] = fin if fin is not None else actual["fin"]
+        if una_sola_voz and texto[-1] in ".?!…":
+            cerrar()
+            actual = None
+    cerrar()
+    return segmentos
+
+
 def _url(valores: Mapping[str, str]) -> str:
     return (valores.get("DEEPGRAM_BASE_URL") or URL_POR_DEFECTO).strip().rstrip("/")
 
@@ -354,6 +404,10 @@ class EstrategiaDeepgram:
     def _segmentos(self, datos: dict, audio: AudioPreparado) -> list[Segmento]:
         hablante = audio.hablante or "desconocido"
         resultados = datos.get("results") or {}
+        if audio.hablante is None:
+            por_palabra = _segmentos_por_palabra(resultados)
+            if por_palabra:
+                return por_palabra
         frases = resultados.get("utterances") or []
         segmentos = []
         for frase in frases:
