@@ -143,6 +143,25 @@ class EstrategiaOpenAI:
         conocidos = sorted(m for m in cls.modelos_conocidos if m in modelos)
         return "Clave válida. Modelos de transcripción disponibles: " + (", ".join(conocidos) or "ninguno conocido")
 
+    @classmethod
+    def listar_modelos(cls, valores: Mapping[str, str], _idioma: str) -> list[str]:
+        """`GET /v1/models`, solo los de transcripción (OpenAI no informa idiomas)."""
+        clave = (valores.get("OPENAI_API_KEY") or "").strip()
+        if not clave:
+            raise TranscripcionNoDisponible("Falta la clave de OpenAI.")
+        url = (valores.get("OPENAI_BASE_URL") or URL_POR_DEFECTO).strip().rstrip("/")
+        try:
+            respuesta = requests.get(f"{url}/models", headers={"Authorization": f"Bearer {clave}"}, timeout=20)
+        except requests.RequestException as error:
+            raise TranscripcionError("No se pudo conectar con OpenAI.") from error
+        if respuesta.status_code in (401, 403):
+            raise TranscripcionError("OpenAI rechazó la clave.")
+        if respuesta.status_code >= 400:
+            raise TranscripcionError(f"OpenAI respondió {respuesta.status_code}.")
+        ids = {str(m.get("id")) for m in respuesta.json().get("data", []) if m.get("id")}
+        transcriben = [i for i in ids if "transcribe" in i or "whisper" in i]
+        return sorted(transcriben, key=lambda m: (m not in cls.modelos_conocidos, m))
+
     @property
     def modelo(self) -> str:
         return self._modelo

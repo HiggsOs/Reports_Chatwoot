@@ -5,10 +5,12 @@ Agregar un proveedor es escribir su clase en `estrategias/` y decorarla con
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from decimal import Decimal
 
 from panel.transcripcion.base import (
     Capacidades,
+    CobroInformado,
     EstrategiaTranscripcion,
     FabricaEstrategia,
     TranscripcionNoDisponible,
@@ -48,6 +50,38 @@ def variable_clave(nombre: str) -> str | None:
 def modelos_conocidos(nombre: str) -> dict[str, Capacidades]:
     """Los modelos que el proveedor sabe usar y qué devuelve cada uno."""
     return dict(getattr(_FABRICAS.get(nombre), "modelos_conocidos", {}) or {})
+
+
+def capacidades(nombre: str, modelo: str) -> Capacidades | None:
+    """Qué devuelve un modelo: el conocido o, si el proveedor da lo mismo con
+    cualquier modelo (`capacidades_por_defecto`), eso. None: no se sabe."""
+    fabrica = _FABRICAS.get(nombre)
+    conocida = modelos_conocidos(nombre).get(modelo)
+    return conocida or getattr(fabrica, "capacidades_por_defecto", None)
+
+
+def listar_modelos(nombre: str, valores: Mapping[str, str], idioma: str) -> list[str]:
+    """Los modelos de transcripción que el proveedor ofrece hoy a esta cuenta
+    para ese idioma, preguntándole a su API. Lanza TranscripcionError si falla."""
+    fabrica = _FABRICAS.get(nombre)
+    listar = getattr(fabrica, "listar_modelos", None)
+    if listar is None:
+        raise TranscripcionNoDisponible("Este proveedor no informa sus modelos.")
+    return listar(valores, idioma)
+
+
+def informa_cobros(nombre: str) -> bool:
+    """Si el proveedor dice por API cuánto cobró (para no cargarlo a mano)."""
+    return hasattr(_FABRICAS.get(nombre), "cobros")
+
+
+def cobros(nombre: str, valores: Mapping[str, str], desde: datetime, hasta: datetime) -> list[CobroInformado]:
+    """Lo que el proveedor cobró por modelo en [desde, hasta), según su API.
+    Lanza TranscripcionError si falla."""
+    fabrica = _FABRICAS.get(nombre)
+    if not informa_cobros(nombre):
+        raise TranscripcionNoDisponible("Este proveedor no informa lo cobrado.")
+    return fabrica.cobros(valores, desde, hasta)
 
 
 def crear_modelo(

@@ -400,7 +400,15 @@ OpenAI anunció su apagado para el 26/02/2027, así que antes de esa fecha hay q
 cambiar `OPENAI_MODELO_TRANSCRIPCION` (y `OPENAI_FORMATO_RESPUESTA` si el modelo
 nuevo no es uno que el código conozca). Deepgram (`nova-3` por defecto) separa
 hablantes en cualquier modelo y las cuentas nuevas traen crédito gratis; *Probar*
-la clave muestra el saldo que queda. Para sumar otro proveedor: una clase con
+la clave muestra el saldo que queda.
+
+**Lo cobrado de verdad.** En Transcripción › Gasto y precio real, *Traer lo
+cobrado* pide a Deepgram el historial de pedidos del mes (cada transcripción
+trae su costo y su duración) y lo guarda por modelo; el panel calcula el precio
+real por minuto y, si se desvía del configurado, *Usar este precio* lo corrige.
+La clave tiene que poder ver el uso del proyecto (administrador o miembro).
+Ningún proveedor informa su lista de precios por API, y OpenAI solo da el gasto
+con una clave de administrador, así que para OpenAI lo cobrado se carga a mano. Para sumar otro proveedor: una clase con
 `@registrar`, sus variables de entorno, y su caso en las pruebas de contrato de
 `tests/test_transcripcion_estrategias.py`.
 

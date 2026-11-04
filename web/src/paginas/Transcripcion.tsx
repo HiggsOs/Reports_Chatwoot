@@ -2,11 +2,11 @@
 // gasto y precio real cobrado, y comparación de versiones.
 
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api/cliente";
 import type {
-  ConfiguracionTranscripcion, FilaGasto, LlamadaComparable, ModeloTranscripcion, Prueba, ResumenTranscripcion,
+  CobrosTraidos, ConfiguracionTranscripcion, FilaGasto, LlamadaComparable, ModeloDisponible, ModeloTranscripcion, Prueba, ResumenTranscripcion,
   TranscripcionesLlamada,
 } from "../api/tipos";
 import { Aviso, Boton, Cabecera, Cargando, ErrorCarga, Insignia, Metrica, Tarjeta } from "../componentes/basicos";
@@ -132,6 +132,24 @@ function Gasto() {
     (filas.data ?? []).forEach((f) => todos.set(`${f.proveedor}:${f.modelo}`, { proveedor: f.proveedor, modelo: f.modelo, titulo: f.titulo }));
     return [...todos.values()];
   }, [configuracion.data, filas.data]);
+  const avisar = useAvisos();
+  const cliente = useQueryClient();
+  const configurados = new Set((configuracion.data?.modelos ?? []).map((m) => `${m.proveedor}:${m.modelo}`));
+  const traer = useMutation({
+    mutationFn: () => api.post<CobrosTraidos[]>("/api/transcripcion/cobros/traer", { mes }),
+    onSuccess: () => cliente.invalidateQueries({ queryKey: ["gasto"] }),
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  const usarPrecio = useMutation({
+    mutationFn: (datos: { proveedor: string; modelo: string; precio_minuto: number }) => api.put("/api/transcripcion/modelos/precio", datos),
+    onSuccess: (_r, datos) => {
+      avisar(`Precio de ${datos.proveedor} · ${datos.modelo} actualizado a ${numero(datos.precio_minuto, 5)} USD/min.`);
+      cliente.invalidateQueries({ queryKey: ["gasto"] });
+      cliente.invalidateQueries({ queryKey: ["transcripcion-configuracion"] });
+    },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  useEffect(() => traer.reset(), [mes]); // eslint-disable-line react-hooks/exhaustive-deps
   const diferencia = (f: FilaGasto) => (f.diferencia === null ? "—" : `${f.diferencia > 0 ? "+" : ""}${numero(f.diferencia * 100, 1)} %`);
 
   return (
@@ -148,7 +166,15 @@ function Gasto() {
             ]} />
           </Tarjeta>
           <Tarjeta>
-            <div className="tarjeta-cab"><b>Precio real cobrado</b><span className="cap">Cargue lo que dice la factura o el panel de uso del proveedor. Más de un 5 % de diferencia se marca como desviado.</span></div>
+            <div className="tarjeta-cab">
+              <div><b>Precio real cobrado</b><br /><span className="cap">Tráigalo del proveedor (hoy Deepgram) o cárguelo abajo con lo que dice la factura. Más de un 5 % de diferencia se marca como desviado.</span></div>
+              <Boton icono="download" cargando={traer.isPending} onClick={() => traer.mutate()}>Traer lo cobrado en {textoMes}</Boton>
+            </div>
+            {traer.data?.map((r) => (
+              <div key={r.proveedor} style={{ padding: "0 14px 10px" }}>
+                <Aviso tipo={r.ok ? "exito" : "error"}><b>{r.titulo}:</b> {r.mensaje}</Aviso>
+              </div>
+            ))}
             <Tabla filas={filas.data!} clave={(f) => `${f.proveedor}:${f.modelo}`} alto="auto" vacio="Sin datos en ese mes." columnas={[
               { titulo: "Modelo", celda: (f) => <span className="mono">{f.titulo}</span> },
               { titulo: "Min cobrados", celda: (f) => <span className="mono">{numero(f.minutos_cobrados, 0)}</span>, derecha: true },
@@ -157,10 +183,14 @@ function Gasto() {
               { titulo: "USD/min real", celda: (f) => <span className="mono">{numero(f.precio_real, 4)}</span>, derecha: true },
               { titulo: "USD/min configurado", celda: (f) => <span className="mono">{numero(f.precio_configurado, 4)}</span>, derecha: true },
               { titulo: "Diferencia", celda: (f) => (f.desviado ? <Insignia tono="desviado" icono="warning">{diferencia(f)}</Insignia> : <span className="mono">{diferencia(f)}</span>), derecha: true },
+              { titulo: "", celda: (f) => (f.precio_real !== null && (f.desviado || f.precio_configurado === null) && configurados.has(`${f.proveedor}:${f.modelo}`)
+                ? <Boton chico icono="price_check" cargando={usarPrecio.isPending && usarPrecio.variables?.modelo === f.modelo}
+                    onClick={() => usarPrecio.mutate({ proveedor: f.proveedor, modelo: f.modelo, precio_minuto: f.precio_real! })}>Usar este precio</Boton>
+                : null) },
             ]} />
             {filas.data!.filter((f) => f.desviado).map((f) => (
               <div key={f.titulo} style={{ padding: "0 14px 14px" }}>
-                <Aviso tipo="atencion">{f.titulo} cobra {diferencia(f)} respecto de lo configurado. Actualice el precio a {numero(f.precio_real, 4)} USD/min en Configuración o revise si el proveedor redondea cada audio al minuto.</Aviso>
+                <Aviso tipo="atencion">{f.titulo} cobra {diferencia(f)} respecto de lo configurado. Use el precio real ({numero(f.precio_real, 4)} USD/min) o revise si el proveedor redondea cada audio al minuto.</Aviso>
               </div>
             ))}
           </Tarjeta>
@@ -300,7 +330,21 @@ function ClaveProveedor({ proveedor }: { proveedor: ConfiguracionTranscripcion["
   );
 }
 
-interface FilaModelo extends ModeloTranscripcion { precio: string }
+// `manual`: el id se escribe a mano (un modelo que el panel todavía no conoce).
+function QueDevuelve({ texto }: { texto: string | undefined }) {
+  if (!texto) return <span className="cap">Desconocido: se trata como solo texto</span>;
+  const diariza = texto.startsWith("separa hablantes");
+  return (
+    <span className="fila" style={{ gap: 6, flexWrap: "wrap" }}>
+      <Insignia tono={diariza ? "ok" : "neutro"} icono={diariza ? "record_voice_over" : undefined}>{diariza ? "Separa hablantes" : "No separa hablantes"}</Insignia>
+      <span className="cap">{texto.includes("tiempos") ? "con tiempos" : "solo texto"}</span>
+    </span>
+  );
+}
+
+interface FilaModelo extends ModeloTranscripcion { precio: string; manual?: boolean }
+
+const OTRO_MODELO = "__otro";
 
 function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion }) {
   const avisar = useAvisos();
@@ -318,7 +362,22 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
   const [confirmar, setConfirmar] = useState(configuracion.confirmar_lote_usd ? String(configuracion.confirmar_lote_usd) : "");
   useEffect(() => setModelos(iniciales()), [configuracion]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const conocidos = Object.fromEntries(configuracion.proveedores.map((p) => [p.nombre, p.modelos_conocidos]));
+  // Lo que cada proveedor con clave ofrece hoy (su API de modelos), sumado a los conocidos.
+  const conClave = configuracion.proveedores.filter((p) => p.clave_mascara);
+  const disponibles = useQueries({
+    queries: conClave.map((p) => ({
+      queryKey: ["modelos-disponibles", p.nombre, configuracion.idioma],
+      queryFn: () => api.get<ModeloDisponible[]>(`/api/transcripcion/proveedores/${p.nombre}/modelos`),
+      staleTime: 10 * 60 * 1000,
+      retry: false,
+    })),
+  });
+  const conocidos: Record<string, Record<string, string>> = Object.fromEntries(configuracion.proveedores.map((p) => [p.nombre, { ...p.modelos_conocidos }]));
+  conClave.forEach((p, i) => {
+    for (const d of disponibles[i]?.data ?? []) conocidos[p.nombre][d.modelo] = d.devuelve;
+  });
+  const fallas = conClave.map((p, i) => ({ p, error: disponibles[i]?.error })).filter((f) => f.error);
+  const primerModelo = (proveedor: string) => Object.keys(conocidos[proveedor] ?? {})[0] ?? "";
   const activos = modelos.filter((m) => m.activo && m.modelo.trim()).map((m) => `${m.proveedor}:${m.modelo.trim()}`);
   const titulo = (clave: string) => clave.replace(":", " · ");
   const cambiar = (i: number, cambios: Partial<FilaModelo>) => setModelos(modelos.map((m, j) => (j === i ? { ...m, ...cambios } : m)));
@@ -343,12 +402,18 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
     <>
       <Tarjeta>
         <div className="tarjeta-cab">
-          <div><h2>Modelos y precios</h2><span className="cap">Copie el precio de la tarifa del proveedor (USD por minuto). Un modelo apagado no se ofrece, pero sus transcripciones viejas se siguen leyendo.</span></div>
-          <Boton chico icono="add" onClick={() => setModelos([...modelos, { proveedor: configuracion.proveedores[0]?.nombre ?? "openai", modelo: "", precio_minuto: null, redondeo: "segundo", activo: true, precio: "" }])}>Agregar modelo</Boton>
+          <div><h2>Modelos y precios</h2><span className="cap">La lista de modelos sale de cada proveedor con clave (los que sirven para el idioma configurado). Copie el precio de su tarifa (USD por minuto). Un modelo apagado no se ofrece, pero sus transcripciones viejas se siguen leyendo.</span></div>
+          <Boton chico icono="add" onClick={() => {
+            const proveedor = configuracion.proveedores[0]?.nombre ?? "openai";
+            setModelos([...modelos, { proveedor, modelo: primerModelo(proveedor), precio_minuto: null, redondeo: "segundo", activo: true, precio: "" }]);
+          }}>Agregar modelo</Boton>
         </div>
+        {fallas.map(({ p, error }) => (
+          <Aviso key={p.nombre} tipo="atencion">No se pudo traer la lista de modelos de {p.titulo} ({(error as Error).message}). Se muestran los conocidos.</Aviso>
+        ))}
         <div className="tabla-caja">
           <table className="tabla">
-            <thead><tr><th>Activo</th><th>Proveedor</th><th>Modelo (id exacto)</th><th>Qué devuelve</th><th className="derecha">USD / min</th><th>Mínimo cobrado</th><th className="derecha">Llamada de 5 min</th><th /></tr></thead>
+            <thead><tr><th>Activo</th><th>Proveedor</th><th>Modelo</th><th>Qué devuelve</th><th className="derecha">USD / min</th><th>Mínimo cobrado</th><th className="derecha">Llamada de 5 min</th><th /></tr></thead>
             <tbody>
               {modelos.map((m, i) => {
                 const precio = importe(m.precio);
@@ -356,12 +421,27 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
                   <tr key={i} style={m.activo ? undefined : { opacity: 0.65 }}>
                     <td><input type="checkbox" aria-label={`Activar ${m.modelo || "modelo nuevo"}`} checked={m.activo} onChange={(e) => cambiar(i, { activo: e.target.checked })} /></td>
                     <td>
-                      <select className="entrada chica" aria-label="Proveedor" value={m.proveedor} onChange={(e) => cambiar(i, { proveedor: e.target.value })}>
+                      <select className="entrada chica" aria-label="Proveedor" value={m.proveedor} style={{ minWidth: 120 }}
+                        onChange={(e) => cambiar(i, { proveedor: e.target.value, modelo: primerModelo(e.target.value), manual: false })}>
                         {configuracion.proveedores.map((p) => <option key={p.nombre} value={p.nombre}>{p.titulo}</option>)}
                       </select>
                     </td>
-                    <td><input className="entrada chica mono" aria-label="Id del modelo" list={`modelos-${m.proveedor}`} value={m.modelo} onChange={(e) => cambiar(i, { modelo: e.target.value })} style={{ width: 260 }} /></td>
-                    <td className="cap">{conocidos[m.proveedor]?.[m.modelo.trim()] ?? "desconocido: solo texto"}</td>
+                    <td>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <select className="entrada chica mono" aria-label="Modelo" style={{ width: 260 }}
+                          value={m.manual || (m.modelo.trim() && !conocidos[m.proveedor]?.[m.modelo.trim()]) ? OTRO_MODELO : m.modelo.trim()}
+                          onChange={(e) => cambiar(i, e.target.value === OTRO_MODELO ? { modelo: "", manual: true } : { modelo: e.target.value, manual: false })}>
+                          {!m.modelo.trim() && !m.manual && <option value="">Elija un modelo</option>}
+                          {Object.keys(conocidos[m.proveedor] ?? {}).map((id) => <option key={id} value={id}>{id}</option>)}
+                          <option value={OTRO_MODELO}>Otro (escribir el id)…</option>
+                        </select>
+                        {(m.manual || (m.modelo.trim() && !conocidos[m.proveedor]?.[m.modelo.trim()])) && (
+                          <input className="entrada chica mono" aria-label="Id del modelo" placeholder="Id exacto del modelo" value={m.modelo}
+                            onChange={(e) => cambiar(i, { modelo: e.target.value, manual: true })} style={{ width: 260 }} />
+                        )}
+                      </div>
+                    </td>
+                    <td><QueDevuelve texto={conocidos[m.proveedor]?.[m.modelo.trim()]} /></td>
                     <td className="derecha"><input className="entrada chica mono" aria-label={`USD por minuto de ${m.modelo}`} inputMode="decimal" value={m.precio} onChange={(e) => cambiar(i, { precio: e.target.value })} style={{ width: 90, textAlign: "right" }} placeholder="—" /></td>
                     <td>
                       <select className="entrada chica" aria-label="Mínimo cobrado" value={m.redondeo} onChange={(e) => cambiar(i, { redondeo: e.target.value as "segundo" | "minuto" })}>
@@ -376,9 +456,6 @@ function Modelos({ configuracion }: { configuracion: ConfiguracionTranscripcion 
               })}
             </tbody>
           </table>
-          {configuracion.proveedores.map((p) => (
-            <datalist key={p.nombre} id={`modelos-${p.nombre}`}>{Object.keys(p.modelos_conocidos).map((m) => <option key={m} value={m} />)}</datalist>
-          ))}
         </div>
       </Tarjeta>
 

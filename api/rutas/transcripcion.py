@@ -15,7 +15,7 @@ from panel.ajustes import enmascarar, guardar_validado, origenes
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
 from panel.db.modelos import Llamada
 from panel.transcripcion import consultas, registro
-from panel.transcripcion.base import TranscripcionError
+from panel.transcripcion.base import TranscripcionError, TranscripcionNoDisponible
 from panel.transcripcion.estrategias.openai import MODELO_POR_DEFECTO
 from panel.transcripcion.servicio import ServicioTranscripcion, VistaTranscripcion
 
@@ -32,7 +32,7 @@ def _servicio(c: Contenedor) -> ServicioTranscripcion:
 
 
 def que_devuelve(proveedor: str, modelo: str) -> str:
-    capacidades = registro.modelos_conocidos(proveedor).get(modelo)
+    capacidades = registro.capacidades(proveedor, modelo)
     if capacidades is None:
         return "solo texto"
     if capacidades.diarizacion:
@@ -272,6 +272,70 @@ def guardar_cobro(cobro: Cobro, s: Session = Depends(sesion)) -> None:
     consultas.guardar_cobro(s, cobro.mes, cobro.proveedor, cobro.modelo, cobro.minutos, cobro.usd)
 
 
+class CobrosTraidos(BaseModel):
+    proveedor: str
+    titulo: str
+    ok: bool
+    mensaje: str
+
+
+class PedidoCobros(BaseModel):
+    mes: date
+
+
+@router.post("/transcripcion/cobros/traer", response_model=list[CobrosTraidos])
+def traer_cobros(
+    pedido: PedidoCobros, c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)
+) -> list[CobrosTraidos]:
+    """Pide a cada proveedor con clave lo que cobró en el mes y lo guarda como
+    el cobro de cada modelo (pisa lo cargado a mano para esos modelos)."""
+    valores = {**c.entorno, **c.lectura.valores}
+    desde, hasta = consultas.limites_del_mes(pedido.mes)
+    resultados = []
+    for nombre in registro.nombres():
+        variable = registro.variable_clave(nombre)
+        if not registro.informa_cobros(nombre) or not variable or not (valores.get(variable) or "").strip():
+            continue
+        titulo = registro.titulo(nombre)
+        try:
+            cobros = registro.cobros(nombre, valores, desde, hasta)
+        except TranscripcionError as error:
+            resultados.append(CobrosTraidos(proveedor=nombre, titulo=titulo, ok=False, mensaje=str(error)))
+            continue
+        for cobro in cobros:
+            consultas.guardar_cobro(s, pedido.mes, nombre, cobro.modelo, cobro.minutos, cobro.usd)
+        detalle = "; ".join(f"{c.modelo}: {c.minutos:.1f} min y {c.usd:.2f} USD" for c in cobros)
+        resultados.append(CobrosTraidos(
+            proveedor=nombre, titulo=titulo, ok=True,
+            mensaje=f"Cobrado: {detalle}." if cobros else "No hay transcripciones cobradas en ese mes.",
+        ))
+    if not resultados:
+        raise HTTPException(409, "Ningún proveedor con clave informa lo cobrado. Hoy lo hace Deepgram.")
+    return resultados
+
+
+class NuevoPrecio(BaseModel):
+    proveedor: str
+    modelo: str
+    precio_minuto: Decimal
+
+
+@router.put("/transcripcion/modelos/precio", status_code=204)
+def usar_precio(datos: NuevoPrecio, c: Contenedor = Depends(contenedor)) -> None:
+    """Pone ese precio por minuto al modelo (por ejemplo, el real cobrado)."""
+    if datos.precio_minuto < 0:
+        raise HTTPException(422, "El precio no puede ser negativo.")
+    modelos = _modelos_iniciales(c)
+    if not any(m.proveedor == datos.proveedor and m.modelo == datos.modelo for m in modelos):
+        raise HTTPException(404, "Ese modelo no está en la lista de Configuración.")
+    nuevos = [
+        m.model_copy(update={"precio_minuto": datos.precio_minuto})
+        if m.proveedor == datos.proveedor and m.modelo == datos.modelo else m
+        for m in modelos
+    ]
+    guardar(c, {"TRANSCRIPCION_MODELOS": json.dumps([m.model_dump(mode="json") for m in nuevos], ensure_ascii=False)})
+
+
 @router.get("/transcripcion/comparables", response_model=list[consultas.LlamadaComparable])
 def comparables(s: Session = Depends(sesion)):
     return consultas.llamadas_comparables(s)
@@ -306,13 +370,21 @@ class ConfiguracionTranscripcion(BaseModel):
 def _modelos_iniciales(c: Contenedor) -> list[ModeloTranscripcion]:
     cfg = c.cfg
     if cfg.transcripcion_modelos:
-        return list(cfg.transcripcion_modelos)
-    efectivo = {**c.entorno, **c.lectura.valores}
-    actual = (efectivo.get("OPENAI_MODELO_TRANSCRIPCION") or MODELO_POR_DEFECTO).strip()
-    precio = (efectivo.get("OPENAI_PRECIO_MINUTO") or "").strip().replace(",", ".") or None
-    modelos = [ModeloTranscripcion(proveedor="openai", modelo=actual, precio_minuto=precio)]
-    modelos += [ModeloTranscripcion(proveedor="openai", modelo=m, activo=False)
-                for m in registro.modelos_conocidos("openai") if m != actual]
+        modelos = list(cfg.transcripcion_modelos)
+    else:
+        efectivo = {**c.entorno, **c.lectura.valores}
+        actual = (efectivo.get("OPENAI_MODELO_TRANSCRIPCION") or MODELO_POR_DEFECTO).strip()
+        precio = (efectivo.get("OPENAI_PRECIO_MINUTO") or "").strip().replace(",", ".") or None
+        modelos = [ModeloTranscripcion(proveedor="openai", modelo=actual, precio_minuto=precio)]
+        modelos += [ModeloTranscripcion(proveedor="openai", modelo=m, activo=False)
+                    for m in registro.modelos_conocidos("openai") if m != actual]
+    # Un proveedor que todavía no está en la lista (uno recién agregado, como
+    # Deepgram) aparece con sus modelos conocidos apagados, listos para activar.
+    presentes = {m.proveedor for m in modelos}
+    for nombre in registro.nombres():
+        if nombre != "falsa" and nombre not in presentes:
+            modelos += [ModeloTranscripcion(proveedor=nombre, modelo=m, activo=False)
+                        for m in registro.modelos_conocidos(nombre)]
     return modelos
 
 
@@ -410,6 +482,24 @@ def _variable(proveedor: str) -> str:
 @router.put("/transcripcion/claves/{proveedor}", status_code=204)
 def guardar_clave(proveedor: str, datos: Clave, c: Contenedor = Depends(contenedor)) -> None:
     guardar(c, {_variable(proveedor): (datos.clave or "").strip() or None})
+
+
+class ModeloDisponible(BaseModel):
+    modelo: str
+    devuelve: str
+
+
+@router.get("/transcripcion/proveedores/{proveedor}/modelos", response_model=list[ModeloDisponible])
+def modelos_disponibles(proveedor: str, c: Contenedor = Depends(contenedor)) -> list[ModeloDisponible]:
+    """Los modelos que el proveedor ofrece hoy a esta cuenta, preguntándole a su API."""
+    valores = {**c.entorno, **c.lectura.valores}
+    try:
+        modelos = registro.listar_modelos(proveedor, valores, c.cfg.transcripcion_idioma)
+    except TranscripcionNoDisponible as error:
+        raise HTTPException(409, str(error)) from error
+    except TranscripcionError as error:
+        raise HTTPException(502, str(error)) from error
+    return [ModeloDisponible(modelo=m, devuelve=que_devuelve(proveedor, m)) for m in modelos]
 
 
 class Prueba(BaseModel):

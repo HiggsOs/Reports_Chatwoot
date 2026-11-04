@@ -73,6 +73,14 @@ class Transcripcion(BaseModel):
         return "\n".join(segmento.texto for segmento in self.segmentos)
 
 
+class CobroInformado(BaseModel):
+    """Lo que el proveedor dice que cobró por un modelo en un período."""
+
+    modelo: str
+    minutos: Decimal
+    usd: Decimal
+
+
 class EstrategiaTranscripcion(Protocol):
     nombre: ClassVar[str]  # el que se guarda en la base; no cambia nunca
     titulo: ClassVar[str]
