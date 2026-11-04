@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 import bcrypt
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import sessionmaker
 
 from api.contenedor import Contenedor
@@ -450,3 +450,59 @@ def test_traer_lo_cobrado_y_usar_el_precio_real(entorno, datos, tmp_path, monkey
         r = cliente.put("/api/transcripcion/modelos/precio",
                         json={"proveedor": "deepgram", "modelo": "no-existe", "precio_minuto": "1"}, headers=CABECERA)
         assert r.status_code == 404
+
+
+def test_reintentar_con_otro_modelo(entorno, datos, tmp_path, monkeypatch):
+    from api.contenedor import Contenedor as ClaseContenedor
+    from panel.db.modelos import Llamada, TrabajoTranscripcion
+    from panel.transcripcion.base import OpcionesTranscripcion
+    from panel.transcripcion.estrategias.falsa import EstrategiaFalsa
+    from panel.transcripcion.servicio import ResultadoTranscripcion, ServicioTranscripcion
+
+    servicio = ServicioTranscripcion(datos, None, {"falsa": EstrategiaFalsa(), "otra": EstrategiaFalsa()}, ["falsa"],
+                                     OpcionesTranscripcion(idioma="es"))
+    pedidos = []
+
+    def transcribir(llamada_id, proveedor=None):
+        pedidos.append(proveedor)
+        return ResultadoTranscripcion(error="sin crédito")
+
+    monkeypatch.setattr(servicio, "transcribir", transcribir)
+    monkeypatch.setattr(ClaseContenedor, "transcripcion", property(lambda _self: servicio))
+    with unidad_de_trabajo(datos) as s:
+        llamada_id = s.scalar(select(Llamada.id))
+    trabajo_id = servicio.pedir(llamada_id, "falsa")
+    with unidad_de_trabajo(datos) as s:
+        s.get(TrabajoTranscripcion, trabajo_id).estado = "error"
+
+    with TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web")) as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        resumen = cliente.get("/api/transcripcion/resumen").json()
+        assert [m["clave"] for m in resumen["modelos"]] == ["falsa", "otra"]
+        assert resumen["errores"][0]["modelo"] == "falsa"
+
+        malo = {"cambiar_modelo": True, "proveedor": "apagado"}
+        assert cliente.post(f"/api/transcripcion/trabajos/{trabajo_id}/reintentar", json=malo,
+                            headers=CABECERA).status_code == 422
+
+        # Uno solo, con otro modelo: se transcribe enseguida con ese.
+        r = cliente.post(f"/api/transcripcion/trabajos/{trabajo_id}/reintentar",
+                         json={"cambiar_modelo": True, "proveedor": "otra"}, headers=CABECERA)
+        assert r.status_code == 200 and pedidos == ["otra"]
+
+        # Todos los que fallaron, con el principal y sus respaldos (sin modelo fijo).
+        with unidad_de_trabajo(datos) as s:
+            s.get(TrabajoTranscripcion, trabajo_id).estado = "error"
+        r = cliente.post("/api/transcripcion/reintentar", json={"cambiar_modelo": True, "proveedor": None},
+                         headers=CABECERA)
+        assert r.json()["encoladas"] == 1 and pedidos == ["otra", None]
+        # Sin cuerpo, como antes: cada pedido conserva su modelo.
+        with unidad_de_trabajo(datos) as s:
+            s.get(TrabajoTranscripcion, trabajo_id).estado = "error"
+        assert cliente.post("/api/transcripcion/reintentar", headers=CABECERA).json()["encoladas"] == 1
+        assert pedidos == ["otra", None, None]
+
+        with unidad_de_trabajo(datos) as s:
+            s.get(TrabajoTranscripcion, trabajo_id).estado = "hecho"
+        assert cliente.post(f"/api/transcripcion/trabajos/{trabajo_id}/reintentar", json={},
+                            headers=CABECERA).status_code == 409

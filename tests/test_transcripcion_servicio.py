@@ -148,6 +148,41 @@ class EstrategiaQueExplota(EstrategiaFalsa):
         raise KeyError("segments")
 
 
+def test_el_modelo_elegido_va_primero_y_si_falla_siguen_los_configurados(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    estrategias = {"buena": EstrategiaFalsa(), "sin_credito": EstrategiaFalsa(error="sin crédito")}
+    transcripcion = servicio(fabrica, almacen, estrategias=estrategias, cadena=["buena"])
+    resultado = transcripcion.transcribir(llamada_id, "sin_credito")
+    assert resultado.error is None and resultado.proveedor == "buena"
+    # Un modelo que ya no está activo tampoco deja la llamada sin transcribir.
+    assert transcripcion.transcribir(llamada_id, "apagado").proveedor == "buena"
+
+
+def test_reintentar_un_pedido_con_otro_modelo(fabrica, almacen):
+    llamada_id = guardar_llamada(fabrica)
+    estrategias = {"rota": EstrategiaFalsa(error="sin crédito"), "buena": EstrategiaFalsa()}
+    transcripcion = servicio(fabrica, almacen, estrategias=estrategias, cadena=["rota"])
+    trabajo_id = transcripcion.pedir(llamada_id, "rota")
+    for _ in range(3):
+        transcripcion.procesar_cola(5)
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert sesion.get(TrabajoTranscripcion, trabajo_id).estado == "error"
+
+    assert transcripcion.reintentar(trabajo_id, "buena", cambiar_modelo=True)
+    with unidad_de_trabajo(fabrica) as sesion:
+        trabajo = sesion.get(TrabajoTranscripcion, trabajo_id)
+        assert (trabajo.estado, trabajo.intentos, trabajo.proveedor) == ("pendiente", 0, "buena")
+    assert transcripcion.procesar_cola(5, trabajo_ids=[trabajo_id]).hechos == 1
+    # Ya terminó: no se reintenta.
+    assert not transcripcion.reintentar(trabajo_id, None, cambiar_modelo=True)
+
+    # Sin cambiar el modelo, lo conserva.
+    otro = transcripcion.pedir(llamada_id, "rota")
+    assert transcripcion.reintentar(otro)
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert sesion.get(TrabajoTranscripcion, otro).proveedor == "rota"
+
+
 def test_un_error_inesperado_dice_el_motivo_y_prueba_el_respaldo(fabrica, almacen):
     llamada_id = guardar_llamada(fabrica)
     solo_rota = servicio(fabrica, almacen, estrategias={"rota": EstrategiaQueExplota()})

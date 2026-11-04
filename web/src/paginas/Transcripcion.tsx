@@ -6,7 +6,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Link } from "react-router-dom";
 import { api } from "../api/cliente";
 import type {
-  CobrosTraidos, ConfiguracionTranscripcion, FilaGasto, LlamadaComparable, ModeloDisponible, ModeloTranscripcion, Prueba, ResumenTranscripcion,
+  CobrosTraidos, ConfiguracionTranscripcion, FilaGasto, TrabajoConError, LlamadaComparable, ModeloDisponible, ModeloTranscripcion, Prueba, ResumenTranscripcion,
   TranscripcionesLlamada,
 } from "../api/tipos";
 import { Aviso, Boton, Cabecera, Cargando, ErrorCarga, Insignia, Metrica, Tarjeta } from "../componentes/basicos";
@@ -63,18 +63,51 @@ export default function Transcripcion() {
 
 // --- Cola -----------------------------------------------------------------
 
+// Cómo se elige el modelo al reintentar: el del pedido, el principal con sus
+// respaldos, o uno en particular («deepgram:nova-3»).
+const MISMO_MODELO = "";
+const CONFIGURADOS = "__configurados";
+
+function cuerpoReintento(eleccion: string) {
+  if (eleccion === MISMO_MODELO) return { cambiar_modelo: false };
+  return { cambiar_modelo: true, proveedor: eleccion === CONFIGURADOS ? null : eleccion };
+}
+
 function Cola({ resumen }: { resumen: ResumenTranscripcion }) {
   const avisar = useAvisos();
   const cliente = useQueryClient();
+  const [conModelo, setConModelo] = useState(MISMO_MODELO);
+  const nombreModelo = (clave: string | null) => (clave ? resumen.modelos.find((m) => m.clave === clave)?.titulo ?? clave.replace(":", " · ") : "Principal y respaldo");
+  const opciones = [
+    { valor: CONFIGURADOS, texto: "El principal y sus respaldos" },
+    ...resumen.modelos.map((m) => ({ valor: m.clave, texto: `${m.titulo} · ${m.devuelve}` })),
+  ];
   const reintentar = useMutation({
-    mutationFn: () => api.post<{ encoladas: number }>("/api/transcripcion/reintentar"),
-    onSuccess: (r) => { avisar(`${entero(r.encoladas)} llamadas vuelven a la cola. Costo estimado: ${usd(resumen.costo_reintento_usd)}.`); cliente.invalidateQueries(); },
+    mutationFn: () => api.post<{ encoladas: number }>("/api/transcripcion/reintentar", cuerpoReintento(conModelo)),
+    onSuccess: (r) => { avisar(`${entero(r.encoladas)} llamadas se vuelven a transcribir ahora.`); cliente.invalidateQueries(); },
     onError: (e) => avisar((e as Error).message, "error"),
   });
+  const reintentarUno = useMutation({
+    mutationFn: ({ id, eleccion }: { id: number; eleccion: string }) => api.post(`/api/transcripcion/trabajos/${id}/reintentar`, cuerpoReintento(eleccion)),
+    onSuccess: (_r, { eleccion }) => {
+      avisar(eleccion === MISMO_MODELO ? "Se vuelve a transcribir ahora." : `Se vuelve a transcribir ahora con ${eleccion === CONFIGURADOS ? "el principal y sus respaldos" : nombreModelo(eleccion)}.`);
+      cliente.invalidateQueries();
+    },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  const accion = (e: TrabajoConError & { estado?: string }) => e.estado === "en_proceso" ? <span className="cap">—</span> : (
+    <select className="entrada chica" aria-label={`Reintentar la llamada ${e.llamada}`} value="" disabled={!resumen.configurada || reintentarUno.isPending}
+      onChange={(ev) => ev.target.value && reintentarUno.mutate({ id: e.id, eleccion: ev.target.value === "__mismo" ? MISMO_MODELO : ev.target.value })} style={{ minWidth: 190 }}>
+      <option value="">Reintentar con…</option>
+      <option value="__mismo">El mismo modelo ({nombreModelo(e.modelo)})</option>
+      {opciones.map((o) => <option key={o.valor} value={o.valor}>{o.texto}</option>)}
+    </select>
+  );
+  const columnaModelo = { titulo: "Modelo", celda: (e: TrabajoConError) => <span className="cap">{nombreModelo(e.modelo)}</span> };
   return (
     <>
       <p className="cap" style={{ margin: 0 }}>
-        La sincronización transcribe hasta {resumen.por_ciclo} por ciclo, cada {resumen.intervalo_minutos} minutos. Un pedido que falla se reintenta tres veces y después queda aquí. Hechas en total: {entero(resumen.cola.hecho ?? 0)}.
+        La sincronización transcribe hasta {resumen.por_ciclo} por ciclo, cada {resumen.intervalo_minutos} minutos. Si el modelo de un pedido falla, se prueban el principal y los de respaldo; si fallan todos, se reintenta tres veces y después queda en Errores. Hechas en total: {entero(resumen.cola.hecho ?? 0)}.
         {resumen.auto_min_segundos > 0 && ` Las llamadas grabadas nuevas de ${resumen.auto_min_segundos} s o más se agregan solas a la cola.`}
       </p>
       {resumen.abiertos.length === 0 ? <Aviso tipo="info">No hay llamadas esperando transcripción.</Aviso> : (
@@ -84,24 +117,34 @@ function Cola({ resumen }: { resumen: ResumenTranscripcion }) {
             { titulo: "Llamada", celda: (e) => <span className="mono">{e.llamada}</span> },
             { titulo: "Fecha", celda: (e) => <span className="mono">{formatoFechaHora(e.inicio)}</span> },
             { titulo: "Estado", celda: (e) => <Insignia tono={e.estado === "en_proceso" ? "cola" : "neutro"}>{e.estado === "en_proceso" ? "Transcribiendo" : "Esperando"}</Insignia> },
+            columnaModelo,
             { titulo: "Intentos", celda: (e) => e.intentos, derecha: true },
             { titulo: "Último error", celda: (e) => e.error ? <span style={{ color: "var(--error-texto)" }}>{e.error}</span> : <span className="cap">—</span>, ajusta: true },
+            { titulo: "", celda: accion },
           ]} />
         </Tarjeta>
       )}
       {resumen.errores.length === 0 ? <Aviso tipo="exito">No hay transcripciones con error.</Aviso> : (
         <Tarjeta>
-          <div className="tarjeta-cab">
+          <div className="tarjeta-cab" style={{ flexWrap: "wrap", gap: 12 }}>
             <b>Errores · {entero(resumen.errores.length)}</b>
-            <Boton variante="primario" icono="refresh" cargando={reintentar.isPending} disabled={!resumen.configurada} onClick={() => reintentar.mutate()}>
-              Reintentar las que fallaron ({entero(resumen.errores.length)}) · {usd(resumen.costo_reintento_usd)}
-            </Boton>
+            <div className="fila" style={{ gap: 8, alignItems: "flex-end" }}>
+              <div style={{ width: 300 }}>
+                <Seleccion etiqueta="Reintentar con" valor={conModelo} alCambiar={setConModelo}
+                  opciones={[{ valor: MISMO_MODELO, texto: "El modelo de cada pedido" }, ...opciones]} />
+              </div>
+              <Boton variante="primario" icono="refresh" cargando={reintentar.isPending} disabled={!resumen.configurada} onClick={() => reintentar.mutate()}>
+                Reintentar las que fallaron ({entero(resumen.errores.length)})
+              </Boton>
+            </div>
           </div>
           <Tabla filas={resumen.errores} clave={(e) => e.id} alto="auto" columnas={[
             { titulo: "Llamada", celda: (e) => <span className="mono">{e.llamada}</span> },
             { titulo: "Fecha", celda: (e) => <span className="mono">{formatoFechaHora(e.inicio)}</span> },
+            columnaModelo,
             { titulo: "Intentos", celda: (e) => e.intentos, derecha: true },
             { titulo: "Error", celda: (e) => <span style={{ color: "var(--error-texto)" }}>{e.error}</span>, ajusta: true },
+            { titulo: "", celda: accion },
           ]} />
         </Tarjeta>
       )}

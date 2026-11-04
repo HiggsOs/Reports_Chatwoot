@@ -146,12 +146,11 @@ class ServicioTranscripcion:
             return ResultadoTranscripcion(error=f"Error inesperado: {_motivo(error)}")
 
     def _transcribir(self, llamada_id: int, proveedor: str | None) -> ResultadoTranscripcion:
-        if proveedor:
-            # Un pedido viejo puede nombrar solo el proveedor («openai»).
-            elegido = registro_transcripcion.resolver(proveedor, self.estrategias)
-            cadena = [elegido] if elegido else []
-        else:
-            cadena = self.cadena
+        # El modelo elegido va primero; si falla (o ya no está activo), siguen
+        # el principal y los de respaldo configurados.
+        # Un pedido viejo puede nombrar solo el proveedor («openai»).
+        elegido = registro_transcripcion.resolver(proveedor, self.estrategias) if proveedor else None
+        cadena = list(dict.fromkeys([elegido, *self.cadena] if elegido else self.cadena))
         if not cadena:
             return ResultadoTranscripcion(error="No hay un proveedor de transcripción configurado.")
 
@@ -358,11 +357,19 @@ class ServicioTranscripcion:
                     resumen.errores += 1
         return resumen
 
-    def reintentar(self, trabajo_id: int) -> None:
+    def reintentar(self, trabajo_id: int, proveedor: str | None = None, cambiar_modelo: bool = False) -> bool:
+        """Vuelve a poner en la cola un pedido con error o que espera, con los
+        intentos en cero. Con `cambiar_modelo`, pasa a usar `proveedor` (None:
+        el principal y los de respaldo configurados). Un pedido que se está
+        transcribiendo no se toca. Devuelve si lo cambió."""
         with unidad_de_trabajo(self._fabrica) as sesion:
             trabajo = sesion.get(TrabajoTranscripcion, trabajo_id)
-            if trabajo is not None and trabajo.estado == TRABAJO_ERROR:
-                trabajo.estado, trabajo.intentos = TRABAJO_PENDIENTE, 0
+            if trabajo is None or trabajo.estado not in (TRABAJO_ERROR, TRABAJO_PENDIENTE):
+                return False
+            trabajo.estado, trabajo.intentos = TRABAJO_PENDIENTE, 0
+            if cambiar_modelo:
+                trabajo.proveedor = proveedor or None
+            return True
 
     # --- Costos --------------------------------------------------------------
 

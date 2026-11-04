@@ -31,11 +31,11 @@ class TrabajoConError(BaseModel):
     inicio: datetime
     intentos: int
     error: str
+    modelo: str | None = None  # el elegido para el pedido; vacío: el principal y los de respaldo
 
 
 class TrabajoEnCola(TrabajoConError):
     estado: str
-    modelo: str | None  # vacío: el principal
 
 
 class PedidoLlamada(BaseModel):
@@ -127,6 +127,7 @@ def trabajos_con_error(
             inicio=llamada.inicio.astimezone(zona),
             intentos=trabajo.intentos,
             error=trabajo.error or "",
+            modelo=trabajo.proveedor,
         )
         for trabajo, llamada in filas
     ]
