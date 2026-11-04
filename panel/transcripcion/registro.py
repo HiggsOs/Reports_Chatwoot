@@ -50,6 +50,24 @@ def modelos_conocidos(nombre: str) -> dict[str, Capacidades]:
     return dict(getattr(_FABRICAS.get(nombre), "modelos_conocidos", {}) or {})
 
 
+def capacidades(nombre: str, modelo: str) -> Capacidades | None:
+    """Qué devuelve un modelo: el conocido o, si el proveedor da lo mismo con
+    cualquier modelo (`capacidades_por_defecto`), eso. None: no se sabe."""
+    fabrica = _FABRICAS.get(nombre)
+    conocida = modelos_conocidos(nombre).get(modelo)
+    return conocida or getattr(fabrica, "capacidades_por_defecto", None)
+
+
+def listar_modelos(nombre: str, valores: Mapping[str, str], idioma: str) -> list[str]:
+    """Los modelos de transcripción que el proveedor ofrece hoy a esta cuenta
+    para ese idioma, preguntándole a su API. Lanza TranscripcionError si falla."""
+    fabrica = _FABRICAS.get(nombre)
+    listar = getattr(fabrica, "listar_modelos", None)
+    if listar is None:
+        raise TranscripcionNoDisponible("Este proveedor no informa sus modelos.")
+    return listar(valores, idioma)
+
+
 def crear_modelo(
     nombre: str,
     valores: Mapping[str, str],

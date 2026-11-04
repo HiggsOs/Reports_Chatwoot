@@ -356,3 +356,37 @@ def test_deepgram_probar_la_clave_muestra_el_saldo():
     responses.replace(responses.GET, "https://api.deepgram.com/v1/projects", status=401)
     with pytest.raises(TranscripcionError, match="rechazó"):
         registro.probar_clave("deepgram", {"DEEPGRAM_API_KEY": "dg"})
+
+
+@responses.activate
+def test_deepgram_lista_los_modelos_del_idioma():
+    responses.get("https://api.deepgram.com/v1/models", json={"stt": [
+        {"name": "nova-2", "canonical_name": "nova-2-phonecall", "languages": ["en", "en-US"], "batch": True},
+        {"name": "nova-2", "canonical_name": "nova-2-general", "languages": ["es", "es-419", "en"], "batch": True},
+        {"name": "nova-3", "canonical_name": "nova-3-general", "languages": ["multi", "en"], "batch": True},
+        {"name": "nova-3", "canonical_name": "nova-3-general", "languages": ["es"], "batch": True},
+        {"name": "flux", "canonical_name": "flux-general-es", "languages": ["es"], "batch": False},
+        {"name": "base", "languages": ["es"]},
+    ], "tts": [{"name": "aura"}]},
+        match=[matchers.header_matcher({"Authorization": "Token dg"})])
+    modelos = registro.listar_modelos("deepgram", {"DEEPGRAM_API_KEY": "dg"}, "es")
+    # Ni el de solo inglés ni el que no sirve para audios grabados; sin repetidos.
+    assert modelos == ["nova-3-general", "nova-2-general", "base"]
+    # Cualquier modelo de Deepgram separa hablantes, aunque el panel no lo conozca.
+    assert registro.capacidades("deepgram", "nova-2-general").diarizacion
+
+    responses.replace(responses.GET, "https://api.deepgram.com/v1/models", status=401)
+    with pytest.raises(TranscripcionError, match="rechazó"):
+        registro.listar_modelos("deepgram", {"DEEPGRAM_API_KEY": "dg"}, "es")
+    with pytest.raises(TranscripcionNoDisponible):
+        registro.listar_modelos("deepgram", {}, "es")
+
+
+@responses.activate
+def test_openai_lista_solo_los_de_transcripcion():
+    responses.get("https://api.openai.com/v1/models", json={"data": [
+        {"id": "gpt-4o"}, {"id": "whisper-1"}, {"id": "gpt-transcribe"}, {"id": "gpt-4o-transcribe-diarize"},
+    ]})
+    modelos = registro.listar_modelos("openai", {"OPENAI_API_KEY": "sk"}, "es")
+    assert modelos == ["gpt-4o-transcribe-diarize", "whisper-1", "gpt-transcribe"]
+    assert registro.capacidades("openai", "gpt-transcribe") is None

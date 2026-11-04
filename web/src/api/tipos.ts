@@ -78,6 +78,7 @@ export interface FilaGasto {
 export interface LlamadaComparable { llamada_id: number; llamada: string; inicio: string; transcripciones: number }
 export interface ModeloTranscripcion { proveedor: string; modelo: string; precio_minuto: string | number | null; redondeo: "segundo" | "minuto"; activo: boolean }
 export interface Proveedor { nombre: string; titulo: string; variable_clave: string | null; clave_mascara: string; origen_clave: string | null; modelos_conocidos: Record<string, string> }
+export interface ModeloDisponible { modelo: string; devuelve: string }
 export interface ConfiguracionTranscripcion {
   proveedores: Proveedor[]; modelos: ModeloTranscripcion[]; principal: string | null; respaldo: string[];
   idioma: string; vocabulario: string[]; canal_agente: string; auto_min_segundos: number;

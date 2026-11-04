@@ -82,6 +82,8 @@ class EstrategiaDeepgram:
     variable_clave = "DEEPGRAM_API_KEY"
     variables_modelo = ("DEEPGRAM_MODELO_TRANSCRIPCION", "DEEPGRAM_PRECIO_MINUTO", "DEEPGRAM_REDONDEO")
     modelos_conocidos = {"nova-3": CAPACIDADES, "nova-2": CAPACIDADES}
+    # Todos los modelos de Deepgram separan hablantes y dan tiempos.
+    capacidades_por_defecto = CAPACIDADES
 
     def __init__(
         self,
@@ -130,6 +132,34 @@ class EstrategiaDeepgram:
         proyectos = respuesta.json().get("projects") or []
         saldo = cls._saldo(url, clave, proyectos)
         return "Clave válida." + (f" Saldo de la cuenta: {saldo}." if saldo else "")
+
+    @classmethod
+    def listar_modelos(cls, valores: Mapping[str, str], idioma: str) -> list[str]:
+        """`GET /v1/models`: los de voz a texto que sirven para audios grabados
+        y entienden el idioma (o son multilingües). Los Nova-3 primero."""
+        clave = (valores.get("DEEPGRAM_API_KEY") or "").strip()
+        if not clave:
+            raise TranscripcionNoDisponible("Falta la clave de Deepgram.")
+        try:
+            respuesta = requests.get(f"{_url(valores)}/models", headers=_cabeceras(clave), timeout=20)
+        except requests.RequestException as error:
+            raise TranscripcionError("No se pudo conectar con Deepgram.") from error
+        if respuesta.status_code in (401, 403):
+            raise TranscripcionError("Deepgram rechazó la clave.")
+        if respuesta.status_code >= 400:
+            raise TranscripcionError(f"Deepgram respondió {respuesta.status_code}.")
+        idioma = idioma.strip().lower()
+        modelos = set()
+        for modelo in respuesta.json().get("stt") or []:
+            if modelo.get("batch") is False:
+                continue
+            idiomas = [str(i).lower() for i in modelo.get("languages") or []]
+            if idioma and idiomas and not any(i == "multi" or i.split("-")[0] == idioma for i in idiomas):
+                continue
+            nombre = modelo.get("canonical_name") or modelo.get("name")
+            if nombre:
+                modelos.add(str(nombre))
+        return sorted(modelos, key=lambda m: (not m.startswith("nova-3"), not m.startswith("nova-2"), m))
 
     @staticmethod
     def _saldo(url: str, clave: str, proyectos: list[dict]) -> str:

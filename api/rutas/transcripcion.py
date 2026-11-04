@@ -15,7 +15,7 @@ from panel.ajustes import enmascarar, guardar_validado, origenes
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
 from panel.db.modelos import Llamada
 from panel.transcripcion import consultas, registro
-from panel.transcripcion.base import TranscripcionError
+from panel.transcripcion.base import TranscripcionError, TranscripcionNoDisponible
 from panel.transcripcion.estrategias.openai import MODELO_POR_DEFECTO
 from panel.transcripcion.servicio import ServicioTranscripcion, VistaTranscripcion
 
@@ -32,7 +32,7 @@ def _servicio(c: Contenedor) -> ServicioTranscripcion:
 
 
 def que_devuelve(proveedor: str, modelo: str) -> str:
-    capacidades = registro.modelos_conocidos(proveedor).get(modelo)
+    capacidades = registro.capacidades(proveedor, modelo)
     if capacidades is None:
         return "solo texto"
     if capacidades.diarizacion:
@@ -306,13 +306,21 @@ class ConfiguracionTranscripcion(BaseModel):
 def _modelos_iniciales(c: Contenedor) -> list[ModeloTranscripcion]:
     cfg = c.cfg
     if cfg.transcripcion_modelos:
-        return list(cfg.transcripcion_modelos)
-    efectivo = {**c.entorno, **c.lectura.valores}
-    actual = (efectivo.get("OPENAI_MODELO_TRANSCRIPCION") or MODELO_POR_DEFECTO).strip()
-    precio = (efectivo.get("OPENAI_PRECIO_MINUTO") or "").strip().replace(",", ".") or None
-    modelos = [ModeloTranscripcion(proveedor="openai", modelo=actual, precio_minuto=precio)]
-    modelos += [ModeloTranscripcion(proveedor="openai", modelo=m, activo=False)
-                for m in registro.modelos_conocidos("openai") if m != actual]
+        modelos = list(cfg.transcripcion_modelos)
+    else:
+        efectivo = {**c.entorno, **c.lectura.valores}
+        actual = (efectivo.get("OPENAI_MODELO_TRANSCRIPCION") or MODELO_POR_DEFECTO).strip()
+        precio = (efectivo.get("OPENAI_PRECIO_MINUTO") or "").strip().replace(",", ".") or None
+        modelos = [ModeloTranscripcion(proveedor="openai", modelo=actual, precio_minuto=precio)]
+        modelos += [ModeloTranscripcion(proveedor="openai", modelo=m, activo=False)
+                    for m in registro.modelos_conocidos("openai") if m != actual]
+    # Un proveedor que todavía no está en la lista (uno recién agregado, como
+    # Deepgram) aparece con sus modelos conocidos apagados, listos para activar.
+    presentes = {m.proveedor for m in modelos}
+    for nombre in registro.nombres():
+        if nombre != "falsa" and nombre not in presentes:
+            modelos += [ModeloTranscripcion(proveedor=nombre, modelo=m, activo=False)
+                        for m in registro.modelos_conocidos(nombre)]
     return modelos
 
 
@@ -410,6 +418,24 @@ def _variable(proveedor: str) -> str:
 @router.put("/transcripcion/claves/{proveedor}", status_code=204)
 def guardar_clave(proveedor: str, datos: Clave, c: Contenedor = Depends(contenedor)) -> None:
     guardar(c, {_variable(proveedor): (datos.clave or "").strip() or None})
+
+
+class ModeloDisponible(BaseModel):
+    modelo: str
+    devuelve: str
+
+
+@router.get("/transcripcion/proveedores/{proveedor}/modelos", response_model=list[ModeloDisponible])
+def modelos_disponibles(proveedor: str, c: Contenedor = Depends(contenedor)) -> list[ModeloDisponible]:
+    """Los modelos que el proveedor ofrece hoy a esta cuenta, preguntándole a su API."""
+    valores = {**c.entorno, **c.lectura.valores}
+    try:
+        modelos = registro.listar_modelos(proveedor, valores, c.cfg.transcripcion_idioma)
+    except TranscripcionNoDisponible as error:
+        raise HTTPException(409, str(error)) from error
+    except TranscripcionError as error:
+        raise HTTPException(502, str(error)) from error
+    return [ModeloDisponible(modelo=m, devuelve=que_devuelve(proveedor, m)) for m in modelos]
 
 
 class Prueba(BaseModel):

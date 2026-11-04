@@ -215,6 +215,13 @@ def test_configuracion_de_transcripcion(con_sesion):
     assert con_sesion.put("/api/transcripcion/configuracion", json=cambios, headers=CABECERA).status_code == 204
     guardada = con_sesion.get("/api/transcripcion/configuracion").json()
     assert guardada["principal"] == "openai:whisper-1"
+    # Deepgram no estaba en la lista guardada: se ofrecen sus modelos, apagados.
+    deepgram = [(m["modelo"], m["activo"]) for m in guardada["modelos"] if m["proveedor"] == "deepgram"]
+    assert deepgram == [("nova-3", False), ("nova-2", False)]
+    proveedores = {p["nombre"]: p for p in guardada["proveedores"]}
+    assert proveedores["deepgram"]["modelos_conocidos"]["nova-3"] == "separa hablantes, con tiempos"
+    # Sin clave de Deepgram no hay a quién preguntarle los modelos.
+    assert con_sesion.get("/api/transcripcion/proveedores/deepgram/modelos").status_code == 409
     assert guardada["tope_mensual_usd"] == 40
     assert guardada["proveedores"][0]["clave_mascara"].endswith("1234")
 
@@ -390,3 +397,21 @@ def test_transcribir_pasa_por_la_cola_y_dice_por_que_fallo(entorno, datos, tmp_p
         # Pedirla otra vez no duplica el pedido.
         cliente.post(f"/api/llamadas/{llamada['id']}/transcripciones", json={}, headers=CABECERA)
         assert len(cliente.get("/api/transcripcion/resumen").json()["abiertos"]) == 1
+
+
+def test_modelos_disponibles_del_proveedor(con_sesion, monkeypatch):
+    from panel.transcripcion import registro
+    from panel.transcripcion.base import TranscripcionError
+
+    monkeypatch.setattr(registro, "listar_modelos", lambda nombre, valores, idioma: ["nova-3-general", "rarito"])
+    r = con_sesion.get("/api/transcripcion/proveedores/deepgram/modelos")
+    assert r.status_code == 200
+    assert r.json() == [{"modelo": "nova-3-general", "devuelve": "separa hablantes, con tiempos"},
+                        {"modelo": "rarito", "devuelve": "separa hablantes, con tiempos"}]
+
+    def falla(*_args):
+        raise TranscripcionError("Deepgram respondió 500.")
+
+    monkeypatch.setattr(registro, "listar_modelos", falla)
+    r = con_sesion.get("/api/transcripcion/proveedores/deepgram/modelos")
+    assert r.status_code == 502 and r.json()["detail"] == "Deepgram respondió 500."
