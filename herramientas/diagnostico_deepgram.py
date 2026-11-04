@@ -1,7 +1,7 @@
 """Diagnóstico: cuántas voces separa Deepgram en una grabación.
 
 Manda el audio a Deepgram con los mismos parámetros que el panel
-(diarize, utterances, smart_format) y muestra:
+(diarize_model=latest, utterances, smart_format) y muestra:
 
 1. Cómo es el audio: canales, frecuencia, duración.
 2. Cuántas voces detecta Deepgram por palabra y por utterance.
@@ -56,11 +56,15 @@ def info_audio(ruta: Path) -> dict:
     return {**(datos.get("streams") or [{}])[0], **(datos.get("format") or {})}
 
 
-def pedir(contenido: bytes, tipo: str, modelo: str, idioma: str, multicanal: bool) -> dict:
+def pedir(contenido: bytes, tipo: str, modelo: str, idioma: str, multicanal: bool, diarizador: str = "latest") -> dict:
     parametros = [("model", modelo), ("language", idioma), ("punctuate", "true"), ("smart_format", "true"),
-                  ("utterances", "true"), ("diarize", "false" if multicanal else "true")]
+                  ("utterances", "true")]
     if multicanal:
         parametros.append(("multichannel", "true"))
+    elif diarizador == "viejo":
+        parametros.append(("diarize", "true"))  # el parámetro obsoleto, para comparar
+    else:
+        parametros.append(("diarize_model", diarizador))
     respuesta = requests.post(URL, params=parametros, data=contenido, timeout=600,
                               headers={"Authorization": f"Token {clave()}", "Content-Type": tipo})
     if respuesta.status_code >= 400:
@@ -73,6 +77,8 @@ def main() -> None:
     argumentos.add_argument("audio", type=Path)
     argumentos.add_argument("--modelo", default="nova-3")
     argumentos.add_argument("--idioma", default="es")
+    argumentos.add_argument("--diarizador", default="latest",
+                            help="latest (el del panel), v1, v2, o «viejo» para el diarize=true obsoleto")
     opciones = argumentos.parse_args()
     ruta = opciones.audio
     tipo = "audio/wav" if ruta.suffix.lower() == ".wav" else "audio/mpeg"
@@ -83,9 +89,13 @@ def main() -> None:
           f"{info.get('sample_rate')} Hz · {info.get('bit_rate') or '?'} bit/s · {float(info.get('duration') or 0):.0f} s")
 
     print("\n" + "=" * 68, f"\n2. VOCES QUE DETECTA DEEPGRAM ({opciones.modelo}, {opciones.idioma})\n")
-    datos = pedir(ruta.read_bytes(), tipo, opciones.modelo, opciones.idioma, multicanal=False)
+    datos = pedir(ruta.read_bytes(), tipo, opciones.modelo, opciones.idioma, multicanal=False,
+                  diarizador=opciones.diarizador)
     resultados = datos.get("results") or {}
-    palabras = ((resultados.get("channels") or [{}])[0].get("alternatives") or [{}])[0].get("words") or []
+    metadatos = datos.get("metadata") or {}
+    print(f"   Diarizador: {opciones.diarizador} · diarize_info: {metadatos.get('diarize_info') or 'NO VINO (no corrió)'}")
+    palabras = [p for u in resultados.get("utterances") or [] for p in u.get("words") or []] or (
+        ((resultados.get("channels") or [{}])[0].get("alternatives") or [{}])[0].get("words") or [])
     por_palabra = Counter(p.get("speaker") for p in palabras)
     por_utterance = Counter(u.get("speaker") for u in resultados.get("utterances") or [])
     print(f"   Por palabra:   {dict(por_palabra)}  ({len(palabras)} palabras)")

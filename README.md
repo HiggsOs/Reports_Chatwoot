@@ -131,6 +131,7 @@ se guardan cifradas con `PANEL_CLAVE_CIFRADO` (o, si no está, con
 | `DEEPGRAM_API_KEY` | Clave de la API de Deepgram (se puede cargar en Transcripción › Configuración) |
 | `DEEPGRAM_MODELO_TRANSCRIPCION` | Por defecto `nova-3` |
 | `DEEPGRAM_PRECIO_MINUTO` | Precio por minuto de audio en USD, para el costo estimado |
+| `DEEPGRAM_DIARIZADOR` | Qué diarizador separa las voces (`diarize_model`): `latest` (por defecto; hoy v2), `v1` o `v2` |
 | `TRANSCRIPCION_MODELOS` | Modelos que se pueden elegir con su precio, en JSON. Normalmente se carga en Transcripción › Configuración |
 | `TRANSCRIPCION_TOPE_MENSUAL_USD` | Al llegar, la cola de transcripción se pausa hasta el mes siguiente. Vacío: sin tope |
 | `TRANSCRIPCION_AVISO_PORCENTAJE` | Porcentaje del tope en que Inicio avisa. Por defecto `80` |

@@ -13,6 +13,7 @@ Las cuentas nuevas traen crédito gratis; el precio por minuto se carga en
 Transcripción › Configuración como en cualquier modelo.
 """
 
+import logging
 import math
 import time
 from collections import defaultdict
@@ -38,10 +39,15 @@ from panel.transcripcion.registro import registrar
 
 URL_POR_DEFECTO = "https://api.deepgram.com/v1"
 MODELO_POR_DEFECTO = "nova-3"
+# `diarize_model` reemplaza al `diarize=true` obsoleto. Para audios grabados,
+# «latest» es hoy el diarizador v2 (SDK oficial de Deepgram).
+DIARIZADOR_POR_DEFECTO = "latest"
 TIEMPO_LIMITE_SEGUNDOS = 600
 INTENTOS_MAXIMOS = 3
 ESPERA_BASE_SEGUNDOS = 2.0
 ESPERA_MAXIMA_SEGUNDOS = 60.0
+registro = logging.getLogger(__name__)
+
 # Pedidos por página al leer el historial de pedidos (y un tope de páginas).
 PEDIDOS_POR_PAGINA = 1000
 PAGINAS_MAXIMAS = 200
@@ -87,9 +93,14 @@ def _segmentos_por_palabra(resultados: dict) -> list[Segmento]:
     palabra, en cambio, trae su hablante: se agrupan las seguidas de la misma
     voz. Si hay una sola voz, se corta además en cada oración. Vacío si las
     palabras no traen hablante (entonces valen las utterances)."""
-    canales = resultados.get("channels") or [{}]
-    alternativas = canales[0].get("alternatives") or [{}]
-    palabras = alternativas[0].get("words") or []
+    # Las palabras de las utterances traen `punctuated_word` (con mayúsculas y
+    # signos); las del canal no (tipos del SDK oficial de Deepgram). Se usan
+    # las del canal solo si no hay utterances.
+    palabras = [p for u in resultados.get("utterances") or [] for p in u.get("words") or []]
+    if not palabras:
+        canales = resultados.get("channels") or [{}]
+        alternativas = canales[0].get("alternatives") or [{}]
+        palabras = alternativas[0].get("words") or []
     if not palabras or all(p.get("speaker") is None for p in palabras):
         return []
     # Si Deepgram oyó una sola voz, cada oración va aparte: así el auditor
@@ -150,9 +161,11 @@ class EstrategiaDeepgram:
         url: str = URL_POR_DEFECTO,
         sesion: requests.Session | None = None,
         redondeo: str = "segundo",
+        diarizador: str = DIARIZADOR_POR_DEFECTO,
     ) -> None:
         self._clave = clave
         self._modelo = modelo
+        self._diarizador = diarizador
         self._precio = precio_minuto
         self._redondeo_minuto = redondeo == "minuto"
         self._url = url.rstrip("/")
@@ -169,6 +182,7 @@ class EstrategiaDeepgram:
             precio_minuto=_decimal(valores.get("DEEPGRAM_PRECIO_MINUTO")),
             url=_url(valores),
             redondeo=(valores.get("DEEPGRAM_REDONDEO") or "segundo").strip(),
+            diarizador=(valores.get("DEEPGRAM_DIARIZADOR") or DIARIZADOR_POR_DEFECTO).strip(),
         )
 
     @classmethod
@@ -329,15 +343,19 @@ class EstrategiaDeepgram:
 
     # --- Petición ------------------------------------------------------------
 
-    def _parametros(self, audio: AudioPreparado, opciones: OpcionesTranscripcion, vocabulario: bool):
+    def _parametros(
+        self, audio: AudioPreparado, opciones: OpcionesTranscripcion, vocabulario: bool, diarizador: bool = True
+    ):
         parametros = [
             ("model", self._modelo),
             ("language", opciones.idioma),
             ("punctuate", "true"),
             ("smart_format", "true"),
             ("utterances", "true"),
-            ("diarize", "true" if audio.hablante is None else "false"),
         ]
+        # Un canal de un estéreo ya es de una sola persona: no se separan voces.
+        if audio.hablante is None:
+            parametros.append(("diarize_model", self._diarizador) if diarizador else ("diarize", "true"))
         if vocabulario:
             nombre = "keyterm" if self._modelo.startswith("nova-3") else "keywords"
             parametros += [(nombre, palabra) for palabra in opciones.vocabulario]
@@ -345,12 +363,13 @@ class EstrategiaDeepgram:
 
     def _enviar(self, audio: AudioPreparado, opciones: OpcionesTranscripcion) -> dict:
         vocabulario = bool(opciones.vocabulario)
+        diarizador = True
         ultimo_error = ""
         for intento in range(INTENTOS_MAXIMOS):
             try:
                 respuesta = self._sesion.post(
                     f"{self._url}/listen",
-                    params=self._parametros(audio, opciones, vocabulario),
+                    params=self._parametros(audio, opciones, vocabulario, diarizador),
                     headers={**_cabeceras(self._clave), "Content-Type": audio.tipo_mime},
                     data=audio.contenido,
                     timeout=TIEMPO_LIMITE_SEGUNDOS,
@@ -366,6 +385,13 @@ class EstrategiaDeepgram:
                 raise TranscripcionError("Deepgram: la cuenta no tiene saldo.")
             if respuesta.status_code < 400:
                 return respuesta.json()
+            if respuesta.status_code == 400 and diarizador and "diariz" in respuesta.text.lower():
+                # Una cuenta o región que todavía no acepta `diarize_model`:
+                # se pide con el `diarize=true` de antes.
+                registro.warning("Deepgram rechazó diarize_model, se usa diarize=true: %s", respuesta.text[:200])
+                diarizador = False
+                ultimo_error = f"HTTP 400: {respuesta.text[:200]}"
+                continue
             if respuesta.status_code == 400 and vocabulario:
                 # Un modelo o idioma que no admite el vocabulario: se pide sin él.
                 vocabulario = False
@@ -390,7 +416,11 @@ class EstrategiaDeepgram:
 
     def transcribir(self, audio: AudioPreparado, opciones: OpcionesTranscripcion) -> Transcripcion:
         datos = self._enviar(audio, opciones)
-        duracion = _numero((datos.get("metadata") or {}).get("duration"))
+        metadatos = datos.get("metadata") or {}
+        if audio.hablante is None and not metadatos.get("diarize_info"):
+            # Deepgram informa `diarize_info` solo si su diarizador corrió.
+            registro.warning("Deepgram no corrió el diarizador (request_id %s).", metadatos.get("request_id"))
+        duracion = _numero(metadatos.get("duration"))
         duracion = duracion if duracion is not None else audio.duracion_s
         return Transcripcion(
             proveedor=self.nombre,
