@@ -1,7 +1,7 @@
 // Piezas visuales básicas: icono, insignia, botón, tarjeta, aviso, métrica y
 // estados de carga. Todas siguen los tokens de estilos.css.
 
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 export function Icono({ nombre, relleno, tamano, etiqueta }: { nombre: string; relleno?: boolean; tamano?: number; etiqueta?: string }) {
@@ -114,6 +114,40 @@ export function Cabecera({ titulo, subtitulo, children }: { titulo: string; subt
         {subtitulo && <p className="cap" style={{ margin: "2px 0 0" }}>{subtitulo}</p>}
       </div>
       {children && <div className="fila">{children}</div>}
+    </div>
+  );
+}
+
+// «Descargar» con la opción de Excel o CSV. `ruta(formato)` da el enlace de
+// cada uno; el menú se cierra al elegir, al hacer clic afuera o con Escape.
+export function BotonDescarga({ ruta, variante, texto = "Descargar" }: { ruta: (formato: "xlsx" | "csv") => string; variante?: Variante; texto?: string }) {
+  const [abierto, setAbierto] = useState(false);
+  const caja = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!abierto) return;
+    const afuera = (e: MouseEvent) => { if (!caja.current?.contains(e.target as Node)) setAbierto(false); };
+    const tecla = (e: KeyboardEvent) => { if (e.key === "Escape") setAbierto(false); };
+    document.addEventListener("mousedown", afuera);
+    document.addEventListener("keydown", tecla);
+    return () => { document.removeEventListener("mousedown", afuera); document.removeEventListener("keydown", tecla); };
+  }, [abierto]);
+  const opcion = (formato: "xlsx" | "csv", titulo: string, detalle: string, icono: string) => (
+    <a role="menuitem" className="menu-descarga-opcion" href={ruta(formato)} target="_blank" rel="noreferrer" onClick={() => setAbierto(false)}>
+      <Icono nombre={icono} tamano={20} />
+      <span><b>{titulo}</b><br /><span className="cap">{detalle}</span></span>
+    </a>
+  );
+  return (
+    <div ref={caja} className="menu-descarga">
+      <button type="button" className={["boton", variante].filter(Boolean).join(" ")} aria-haspopup="menu" aria-expanded={abierto} onClick={() => setAbierto(!abierto)}>
+        <Icono nombre="download" tamano={18} />{texto}<Icono nombre={abierto ? "expand_less" : "expand_more"} tamano={18} />
+      </button>
+      {abierto && (
+        <div role="menu" className="menu-descarga-lista">
+          {opcion("xlsx", "Excel (.xlsx)", "Con formato, fechas y filtros", "table_view")}
+          {opcion("csv", "CSV", "Texto separado por comas", "description")}
+        </div>
+      )}
     </div>
   );
 }

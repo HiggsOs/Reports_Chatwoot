@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api, consulta } from "../api/cliente";
 import type { CostoLote, EstadoConfig, FilaConversacion, FilaInteraccion, FilaLlamada, Listado, TipoInteraccion } from "../api/tipos";
-import { Aviso, Boton, BotonEnlace, Cabecera, Cargando, ErrorCarga, Icono, Insignia, Tarjeta, type Tono } from "../componentes/basicos";
+import { Aviso, Boton, BotonDescarga, BotonEnlace, Cabecera, Cargando, ErrorCarga, Icono, Insignia, Tarjeta, type Tono } from "../componentes/basicos";
 import { Tabla, type Columna } from "../componentes/Tabla";
 import { BarraFiltros, useCatalogos, useFiltros } from "../componentes/filtros";
 import { EditorAsignacion, FranjaAsesor, origenAsignacion } from "../componentes/asignacion";
@@ -95,7 +95,7 @@ export function PaginaInteracciones<T extends FilaInteraccion>({ vista }: { vist
   return (
     <>
       <Cabecera titulo={vista.titulo} subtitulo={vista.subtitulo}>
-        <BotonEnlace a={`/api/interacciones/${vista.tipo}/csv${consulta({ ...filtros })}`} externo icono="download">Descargar CSV</BotonEnlace>
+        <BotonDescarga ruta={(formato) => `/api/interacciones/${vista.tipo}/${formato}${consulta({ ...filtros })}`} />
       </Cabecera>
       <BarraFiltros filtros={filtros} cambiar={cambiar} plataforma={vista.plataforma} />
       {filtros.desde > filtros.hasta && <Aviso tipo="atencion">La fecha inicial no puede ser posterior a la final.</Aviso>}

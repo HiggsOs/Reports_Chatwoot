@@ -152,6 +152,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .boton.solo-icono { width: 36px; padding: 0; }
 .boton.chico.solo-icono { width: 30px; }
 .boton:disabled { opacity: .55; cursor: default; }
+.menu-descarga { position: relative; display: inline-block; }
+.menu-descarga-lista { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 240px; padding: 4px; background: var(--superficie); border: 1px solid var(--borde-fuerte); border-radius: var(--radio); box-shadow: 0 6px 18px rgba(11, 90, 142, .15); }
+.menu-descarga-opcion { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: var(--radio); color: var(--tinta); text-decoration: none; }
+.menu-descarga-opcion:hover, .menu-descarga-opcion:focus-visible { background: var(--fila-elegida); color: var(--tinta); }
+.menu-descarga-opcion .ic { color: var(--primario); margin-top: 1px; }
 .boton-texto { border: 0; background: none; padding: 0; color: var(--primario); font-weight: 600; cursor: pointer; }
 
 .campo { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

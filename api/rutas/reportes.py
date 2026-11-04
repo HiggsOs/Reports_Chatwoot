@@ -13,6 +13,7 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -23,7 +24,8 @@ from chatwoot import CacheMensajes, ChatwootError, ClienteChatwoot
 from config import ruta_cache
 from panel.db.base import unidad_de_trabajo
 from panel.db.repositorios.personas import RepositorioPersonas
-from reporte import SIN_MAPEAR, TZ, escribir_csv, generar_filas, nombre_archivo
+from panel.exportar import TIPO_XLSX, a_excel
+from reporte import COLUMNAS, SIN_MAPEAR, TZ, escribir_csv, generar_filas, nombre_archivo
 
 router = APIRouter(prefix="/api/reportes", tags=["reportes"])
 
@@ -150,14 +152,19 @@ def ver(trabajo_id: str, request: Request, _c: Contenedor = Depends(contenedor))
     )
 
 
-@router.get("/chatwoot/{trabajo_id}/csv")
-def descargar(trabajo_id: str, request: Request, _c: Contenedor = Depends(contenedor)) -> Response:
+@router.get("/chatwoot/{trabajo_id}/{formato}")
+def descargar(
+    trabajo_id: str, formato: Literal["csv", "xlsx"], request: Request, _c: Contenedor = Depends(contenedor)
+) -> Response:
+    """El reporte en CSV o en Excel (.xlsx)."""
     trabajo = _reportes(request).obtener(trabajo_id)
     if trabajo.estado != "listo":
         raise HTTPException(409, "El reporte todavía no terminó.")
-    return Response(
-        escribir_csv(trabajo.filas),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{nombre_archivo(trabajo.desde, trabajo.hasta)}"'},
-    )
+    nombre = nombre_archivo(trabajo.desde, trabajo.hasta)
+    if formato == "xlsx":
+        contenido = a_excel(COLUMNAS, ([f.get(c, "") for c in COLUMNAS] for f in trabajo.filas), "Reporte Chatwoot")
+        nombre, tipo_mime = nombre.removesuffix(".csv") + ".xlsx", TIPO_XLSX
+    else:
+        contenido, tipo_mime = escribir_csv(trabajo.filas), "text/csv; charset=utf-8"
+    return Response(contenido, media_type=tipo_mime, headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
 
