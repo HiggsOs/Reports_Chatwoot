@@ -443,3 +443,50 @@ def test_deepgram_cobros_sin_costo_o_sin_permiso_dicen_por_que():
     responses.replace(responses.GET, f"{base}/projects/p1/requests", status=403)
     with pytest.raises(TranscripcionError, match="administrador"):
         registro.cobros("deepgram", {"DEEPGRAM_API_KEY": "dg"}, desde, hasta)
+
+
+def _palabras(*grupos):
+    """[(hablante, "texto con puntuación", inicio)] → palabras de Deepgram de 0,3 s cada una."""
+    palabras = []
+    for hablante, texto, inicio in grupos:
+        for i, palabra in enumerate(texto.split()):
+            palabras.append({"word": palabra.lower().strip(".,?¿!"), "punctuated_word": palabra,
+                             "start": inicio + i * 0.3, "end": inicio + i * 0.3 + 0.25, "speaker": hablante})
+    return palabras
+
+
+def _con_palabras(palabras, utterances):
+    return {"metadata": {"duration": 30.0}, "results": {
+        "channels": [{"alternatives": [{"transcript": "…", "words": palabras}]}], "utterances": utterances}}
+
+
+@responses.activate
+def test_deepgram_separa_por_palabra_aunque_la_utterance_mezcle_las_voces():
+    palabras = _palabras((0, "Hola, buen día, servicio de grúas.", 0.0), (1, "Hola, buenas. Estoy en la autopista.", 2.0),
+                         (0, "Vale.", 6.0))
+    # Una sola utterance a nombre del hablante 0, como la que mezclaba las dos voces.
+    responses.post(URL_DEEPGRAM, json=_con_palabras(palabras, [
+        {"start": 0.0, "end": 6.3, "speaker": 0, "transcript": "Hola, buen día, servicio de grúas. Hola, buenas. Estoy en la autopista. Vale."}]))
+    segmentos = deepgram().transcribir(AUDIO, OPCIONES).segmentos
+    assert [(s.etiqueta, s.texto) for s in segmentos] == [
+        ("A", "Hola, buen día, servicio de grúas."),
+        ("B", "Hola, buenas. Estoy en la autopista."),
+        ("A", "Vale."),
+    ]
+    assert segmentos[1].inicio == 2.0 and segmentos[1].fin == pytest.approx(3.75)  # 6 palabras
+
+
+@responses.activate
+def test_deepgram_con_una_sola_voz_parte_en_oraciones():
+    palabras = _palabras((0, "Hola, buen día, servicio de grúas. ¿En qué te puedo ayudar? Hola, buenas.", 0.0))
+    responses.post(URL_DEEPGRAM, json=_con_palabras(palabras, []))
+    segmentos = deepgram().transcribir(AUDIO, OPCIONES).segmentos
+    assert [s.texto for s in segmentos] == ["Hola, buen día, servicio de grúas.", "¿En qué te puedo ayudar?", "Hola, buenas."]
+    assert {s.etiqueta for s in segmentos} == {"A"}
+
+
+@responses.activate
+def test_deepgram_sin_hablante_por_palabra_usa_las_utterances():
+    palabras = [{"word": "hola", "punctuated_word": "Hola.", "start": 0.0, "end": 0.3}]
+    responses.post(URL_DEEPGRAM, json=_con_palabras(palabras, DEEPGRAM["results"]["utterances"]))
+    assert [s.etiqueta for s in deepgram().transcribir(AUDIO, OPCIONES).segmentos] == ["A", "B"]

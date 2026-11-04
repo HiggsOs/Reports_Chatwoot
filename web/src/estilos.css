@@ -219,8 +219,12 @@ textarea.entrada { height: auto; padding: 8px 10px; resize: vertical; }
 
 .reproductor { display: flex; align-items: center; gap: 12px; }
 .reproductor .play { width: 38px; height: 38px; border-radius: 19px; border: 0; background: var(--primario); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: 0 0 38px; }
-.barra-audio { flex: 1; height: 14px; border-radius: 4px; background: var(--borde); position: relative; cursor: pointer; overflow: hidden; }
-.barra-audio span { position: absolute; left: 0; top: 0; bottom: 0; background: #a0d5f8; }
+.reproductor .boton.solo-icono { flex: 0 0 auto; }
+/* min-width y altura fija: con flex en columna la barra quedaba en 0 px. */
+.barra-audio { flex: 1 1 auto; min-width: 80px; height: 8px; border-radius: 4px; background: var(--borde); position: relative; cursor: pointer; touch-action: none; }
+.barra-audio:focus-visible { outline: 2px solid var(--foco); outline-offset: 4px; }
+.barra-audio .relleno { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--primario); }
+.barra-audio .tirador { position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #fff; border: 2px solid var(--primario); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 
 .dialogo { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow: auto; }
 .linea { display: grid; grid-template-columns: 62px 74px minmax(0, 1fr); gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 13.5px; align-items: start; }

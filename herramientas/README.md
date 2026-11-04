@@ -35,3 +35,20 @@ ellos.
 Sirvió para decidir que la columna `canal` use el nombre del inbox y no el tipo
 de canal: la cuenta tiene dos bandejas de WhatsApp, y el tipo habría dicho
 "WhatsApp" en ambas sin distinguirlas.
+
+## `diagnostico_deepgram.py`
+
+Muestra cuántas voces separa Deepgram en una grabación concreta: manda el audio
+con los mismos parámetros que el panel y cuenta los hablantes por palabra y por
+utterance. Si es estéreo, también lo pide canal por canal.
+
+```bash
+ .venv/bin/python herramientas/diagnostico_deepgram.py llamada-123.mp3
+```
+
+El MP3 se baja desde la llamada en el panel (botón de descarga del reproductor).
+Lee `DEEPGRAM_API_KEY` del `.env`. Transcribe de verdad, así que gasta lo mismo
+que transcribir la llamada desde el panel.
+
+Sirvió para ver que Deepgram da un hablante por utterance y que una utterance
+puede mezclar las dos voces: el panel ahora arma las frases por palabra.
