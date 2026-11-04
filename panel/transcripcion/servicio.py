@@ -35,7 +35,7 @@ from panel.db.modelos import (
     TrabajoTranscripcion,
     TranscripcionGuardada,
 )
-from panel.transcripcion import preparacion
+from panel.transcripcion import hablantes, preparacion
 from panel.transcripcion import registro as registro_transcripcion
 from panel.transcripcion.base import (
     EstrategiaTranscripcion,
@@ -67,6 +67,8 @@ class VistaTranscripcion(BaseModel):
     costo_estimado: Decimal | None
     principal: bool
     creado_en: datetime
+    # Para las voces sin resolver: cuál parece el agente según sus frases.
+    sugerencia: hablantes.Sugerencia | None = None
 
     @property
     def etiquetas_sin_resolver(self) -> list[str]:
@@ -176,6 +178,7 @@ class ServicioTranscripcion:
                 if plan.necesita_marcas and not estrategia.capacidades.marcas_de_tiempo:
                     plan_usado = preparacion.como_mono(plan, audio.mp3, nombre)
                 segmentos, costo = self._transcribir_plan(estrategia, plan_usado)
+                segmentos = self._resolver_agente(segmentos)
             except TranscripcionError as error:
                 registro.warning("Falló %s en la llamada %s: %s", nombre_estrategia, llamada_id, error)
                 errores.append(f"{estrategia.titulo}: {error}")
@@ -187,6 +190,14 @@ class ServicioTranscripcion:
             transcripcion_id = self._guardar(llamada_id, estrategia, plan_usado, segmentos, costo)
             return ResultadoTranscripcion(transcripcion_id=transcripcion_id, proveedor=nombre_estrategia)
         return ResultadoTranscripcion(error=" · ".join(errores))
+
+    def _resolver_agente(self, segmentos: list[Segmento]) -> list[Segmento]:
+        """Si el proveedor separó voces sin saber cuál es el agente, lo decide
+        por sus frases. Si no se sabe, quedan como «Hablante A», «B»…"""
+        sugerencia = hablantes.identificar_agente(segmentos, self._opciones.frases_agente)
+        if sugerencia is None:
+            return segmentos
+        return hablantes.aplicar_roles(segmentos, hablantes.roles_para(segmentos, sugerencia.etiqueta))
 
     def _transcribir_plan(self, estrategia, plan):
         segmentos: list[Segmento] = []
@@ -243,7 +254,11 @@ class ServicioTranscripcion:
                 .where(TranscripcionGuardada.llamada_id == llamada_id)
                 .order_by(TranscripcionGuardada.principal.desc(), TranscripcionGuardada.creado_en.desc())
             )
-            return [_vista(fila) for fila in filas]
+            vistas = [_vista(fila) for fila in filas]
+        for vista in vistas:
+            if vista.etiquetas_sin_resolver:
+                vista.sugerencia = hablantes.identificar_agente(vista.segmentos, self._opciones.frases_agente)
+        return vistas
 
     def asignar_hablantes(self, transcripcion_id: int, roles: dict[str, str]) -> None:
         """Dice quién es cada hablante que el proveedor separó: {"A": "agente"}."""
@@ -257,6 +272,25 @@ class ServicioTranscripcion:
                 else s
                 for s in fila.segmentos
             ]
+
+    def cambiar_hablante(self, transcripcion_id: int, indice: int, hablante: str) -> None:
+        """Corrige quién dijo una frase (cuando el proveedor no separó las voces)."""
+        if hablante not in ("agente", "cliente", "desconocido"):
+            raise ValueError("El hablante es agente, cliente o desconocido.")
+        with unidad_de_trabajo(self._fabrica) as sesion:
+            fila = sesion.get(TranscripcionGuardada, transcripcion_id)
+            if not 0 <= indice < len(fila.segmentos):
+                raise IndexError("Esa frase no existe.")
+            fila.segmentos = [
+                {**s, "hablante": hablante} if i == indice else s for i, s in enumerate(fila.segmentos)
+            ]
+
+    def intercambiar_hablantes(self, transcripcion_id: int) -> None:
+        """Lo del agente pasa a ser del cliente y al revés."""
+        cambio = {"agente": "cliente", "cliente": "agente"}
+        with unidad_de_trabajo(self._fabrica) as sesion:
+            fila = sesion.get(TranscripcionGuardada, transcripcion_id)
+            fila.segmentos = [{**s, "hablante": cambio.get(s["hablante"], s["hablante"])} for s in fila.segmentos]
 
     def marcar_principal(self, transcripcion_id: int) -> None:
         with unidad_de_trabajo(self._fabrica) as sesion:

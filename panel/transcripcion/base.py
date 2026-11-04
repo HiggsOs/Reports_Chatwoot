@@ -46,6 +46,9 @@ class OpcionesTranscripcion(BaseModel):
 
     idioma: str = "es"
     vocabulario: tuple[str, ...] = ()  # nombres propios, marcas, productos
+    # Frases que dice el agente (el saludo de la empresa): sirven para saber
+    # cuál de las voces que separó el proveedor es la suya.
+    frases_agente: tuple[str, ...] = ()
 
 
 class Segmento(BaseModel):
