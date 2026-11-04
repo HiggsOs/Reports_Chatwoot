@@ -139,6 +139,8 @@ def test_rango_invertido(con_sesion):
 def test_csv(con_sesion):
     r = con_sesion.get("/api/interacciones/conversacion/csv", params=_rango())
     assert r.status_code == 200 and "Id Chatwoot" in r.text
+    r = con_sesion.get("/api/interacciones/llamada/csv", params=_rango())
+    assert r.status_code == 200 and "Texto de la transcripción" in r.text.splitlines()[0]
 
 
 def test_asignar_en_bloque(con_sesion):

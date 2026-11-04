@@ -20,6 +20,7 @@ from panel.db.modelos import (
     Persona,
     PuntoSincronizacion,
     ReglaAsignacion,
+    TranscripcionGuardada,
 )
 from reporte import traducir_estado
 
@@ -58,6 +59,10 @@ class FilaLlamada(FilaInteraccion):
     enlace_plataforma: str | None
     audio_estado: str | None
     transcripcion_estado: str | None
+
+
+class FilaLlamadaCsv(FilaLlamada):
+    transcripcion_texto: str = ""
 
 
 class FilaConversacion(FilaInteraccion):
@@ -163,6 +168,45 @@ def listar_conversaciones(
             )
         )
     return filas
+
+
+# Excel no muestra más de 32 767 caracteres en una celda.
+MAXIMO_TEXTO_CELDA = 32_000
+QUIEN = {"agente": "Agente", "cliente": "Cliente"}
+
+
+def _linea(segmento: dict) -> str:
+    texto = (segmento.get("texto") or "").strip()
+    if not texto:
+        return ""
+    quien = QUIEN.get(segmento.get("hablante"))
+    if quien is None and segmento.get("etiqueta"):
+        quien = f"Hablante {segmento['etiqueta']}"
+    return f"{quien}: {texto}" if quien else texto
+
+
+def textos_de_transcripcion(sesion: Session, llamada_ids: list[int]) -> dict[int, str]:
+    """El texto de la transcripción principal de cada llamada, una línea por
+    frase y con quién habla («Agente: …»)."""
+    if not llamada_ids:
+        return {}
+    filas = sesion.execute(
+        select(TranscripcionGuardada.llamada_id, TranscripcionGuardada.segmentos).where(
+            TranscripcionGuardada.llamada_id.in_(llamada_ids), TranscripcionGuardada.principal
+        )
+    )
+    textos = {}
+    for llamada_id, segmentos in filas:
+        texto = "\n".join(linea for linea in map(_linea, segmentos or []) if linea)
+        if len(texto) > MAXIMO_TEXTO_CELDA:
+            texto = texto[:MAXIMO_TEXTO_CELDA] + " … (recortada: véala completa en el panel)"
+        textos[llamada_id] = texto
+    return textos
+
+
+def con_transcripciones(sesion: Session, filas: list[FilaLlamada]) -> list[FilaLlamadaCsv]:
+    textos = textos_de_transcripcion(sesion, [f.id for f in filas])
+    return [FilaLlamadaCsv(**f.model_dump(), transcripcion_texto=textos.get(f.id, "")) for f in filas]
 
 
 class Resumen(BaseModel):

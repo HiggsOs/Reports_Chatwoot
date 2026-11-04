@@ -133,6 +133,42 @@ def test_a_csv_tiene_bom_y_fechas_legibles(fabrica, datos):
     assert lineas[-1] == "1,2026-11-03 10:00"
 
 
+def test_el_csv_de_llamadas_trae_el_texto_de_la_transcripcion_principal(fabrica, datos):
+    import csv
+    import io
+
+    from sqlalchemy import select
+
+    from panel.db.modelos import Llamada, TranscripcionGuardada
+
+    def transcripcion(llamada_id, segmentos, principal):
+        return TranscripcionGuardada(
+            llamada_id=llamada_id, proveedor="falsa", modelo="m", idioma="es", canales_audio="mono",
+            segmentos=segmentos, texto="", principal=principal,
+        )
+
+    with unidad_de_trabajo(fabrica) as sesion:
+        uno = sesion.scalar(select(Llamada.id).where(Llamada.id_externo == "1"))
+        sesion.add_all([
+            transcripcion(uno, [
+                {"hablante": "agente", "texto": "Buenos días, grúas."},
+                {"hablante": "desconocido", "etiqueta": "B", "texto": "Necesito una grúa, \"ya\"."},
+                {"hablante": "cliente", "texto": "  "},
+            ], principal=True),
+            transcripcion(uno, [{"hablante": "agente", "texto": "Versión vieja"}], principal=False),
+        ])
+
+    with unidad_de_trabajo(fabrica) as sesion:
+        filas = consultas.con_transcripciones(sesion, consultas.listar_llamadas(sesion, filtros()))
+    contenido = consultas.a_csv(filas, {"id_externo": "Id", "transcripcion_texto": "Texto"})
+    leidas = list(csv.DictReader(io.StringIO(contenido.decode("utf-8-sig"))))
+    assert {f["Id"]: f["Texto"] for f in leidas} == {
+        "3": "",
+        "2": "",
+        "1": 'Agente: Buenos días, grúas.\nHablante B: Necesito una grúa, "ya".',
+    }
+
+
 def test_sync_rechaza_una_fecha_invalida():
     with pytest.raises(SystemExit) as salida:
         main(["--desde", "2026-13-01"])
