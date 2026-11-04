@@ -48,7 +48,8 @@ export interface VersionTranscripcion {
   duracion_audio: number | null; costo_estimado: string | null; principal: boolean; creado_en: string;
 }
 export interface OpcionModelo { clave: string; titulo: string; devuelve: string; costo_usd: number | null }
-export interface TranscripcionesLlamada { configurada: boolean; versiones: VersionTranscripcion[]; opciones: OpcionModelo[] }
+export interface PedidoLlamada { id: number; estado: "pendiente" | "en_proceso" | "hecho" | "error"; intentos: number; error: string | null }
+export interface TranscripcionesLlamada { configurada: boolean; versiones: VersionTranscripcion[]; opciones: OpcionModelo[]; pedido: PedidoLlamada | null }
 export interface CostoLote { llamadas: number; minutos: number; costo_usd: number | null; requiere_confirmacion: boolean; umbral_usd: number | null; modelo: string | null }
 
 export interface ResumenCliente { id: number; telefono: string; nombre: string | null; revisar: boolean; llamadas: number; conversaciones: number; ultima: string | null }
@@ -63,10 +64,11 @@ export interface Prueba { ok: boolean; mensaje: string }
 export interface ValorAjuste { valor: string; secreto: boolean; origen: "panel" | "entorno" | null }
 
 export interface TrabajoConError { id: number; llamada_id: number; llamada: string; inicio: string; intentos: number; error: string }
+export interface TrabajoEnCola extends TrabajoConError { estado: "pendiente" | "en_proceso"; modelo: string | null }
 export interface ResumenTranscripcion {
   configurada: boolean; cola: Record<string, number>; gasto_mes_usd: number; tope_mensual_usd: number | null;
   aviso_porcentaje: number; por_ciclo: number; intervalo_minutos: number; auto_min_segundos: number;
-  errores: TrabajoConError[]; costo_reintento_usd: number | null;
+  errores: TrabajoConError[]; abiertos: TrabajoEnCola[]; costo_reintento_usd: number | null;
 }
 export interface FilaGasto {
   proveedor: string; modelo: string; titulo: string; minutos_panel: number; usd_estimado: number | null;

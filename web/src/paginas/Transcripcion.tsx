@@ -19,9 +19,14 @@ import { duracion, entero, formatoFechaHora, numero, usd } from "../utilidades/f
 type IdPestana = "configuracion" | "cola" | "gasto" | "comparar";
 
 export default function Transcripcion() {
-  const resumen = useQuery({ queryKey: ["transcripcion-resumen"], queryFn: () => api.get<ResumenTranscripcion>("/api/transcripcion/resumen") });
+  const resumen = useQuery({
+    queryKey: ["transcripcion-resumen"],
+    queryFn: () => api.get<ResumenTranscripcion>("/api/transcripcion/resumen"),
+    // Con pedidos en curso, la cola se actualiza sola.
+    refetchInterval: (q) => ((q.state.data?.abiertos.length ?? 0) > 0 ? 5000 : false),
+  });
   const errores = resumen.data?.cola.error ?? 0;
-  const [pestana, setPestana] = useState<IdPestana>(errores ? "cola" : "configuracion");
+  const [pestana, setPestana] = useState<IdPestana>(errores || (resumen.data?.abiertos.length ?? 0) ? "cola" : "configuracion");
   const r = resumen.data;
   const tope = r?.tope_mensual_usd;
 
@@ -44,7 +49,7 @@ export default function Transcripcion() {
       )}
       <Pestanas activa={pestana} alCambiar={setPestana} pestanas={[
         { id: "configuracion", titulo: "Configuración", icono: "tune" },
-        { id: "cola", titulo: "Cola", icono: "queue", contador: errores },
+        { id: "cola", titulo: "Cola", icono: "queue", contador: errores + (r?.abiertos.length ?? 0) },
         { id: "gasto", titulo: "Gasto y precio real", icono: "payments" },
         { id: "comparar", titulo: "Comparar versiones", icono: "compare_arrows" },
       ]} />
@@ -72,6 +77,18 @@ function Cola({ resumen }: { resumen: ResumenTranscripcion }) {
         La sincronización transcribe hasta {resumen.por_ciclo} por ciclo, cada {resumen.intervalo_minutos} minutos. Un pedido que falla se reintenta tres veces y después queda aquí. Hechas en total: {entero(resumen.cola.hecho ?? 0)}.
         {resumen.auto_min_segundos > 0 && ` Las llamadas grabadas nuevas de ${resumen.auto_min_segundos} s o más se agregan solas a la cola.`}
       </p>
+      {resumen.abiertos.length === 0 ? <Aviso tipo="info">No hay llamadas esperando transcripción.</Aviso> : (
+        <Tarjeta>
+          <div className="tarjeta-cab"><b>En cola · {entero(resumen.abiertos.length)}</b></div>
+          <Tabla filas={resumen.abiertos} clave={(e) => e.id} alto="auto" columnas={[
+            { titulo: "Llamada", celda: (e) => <span className="mono">{e.llamada}</span> },
+            { titulo: "Fecha", celda: (e) => <span className="mono">{formatoFechaHora(e.inicio)}</span> },
+            { titulo: "Estado", celda: (e) => <Insignia tono={e.estado === "en_proceso" ? "cola" : "neutro"}>{e.estado === "en_proceso" ? "Transcribiendo" : "Esperando"}</Insignia> },
+            { titulo: "Intentos", celda: (e) => e.intentos, derecha: true },
+            { titulo: "Último error", celda: (e) => e.error ? <span style={{ color: "var(--error-texto)" }}>{e.error}</span> : <span className="cap">—</span>, ajusta: true },
+          ]} />
+        </Tarjeta>
+      )}
       {resumen.errores.length === 0 ? <Aviso tipo="exito">No hay transcripciones con error.</Aviso> : (
         <Tarjeta>
           <div className="tarjeta-cab">

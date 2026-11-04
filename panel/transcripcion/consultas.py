@@ -33,6 +33,20 @@ class TrabajoConError(BaseModel):
     error: str
 
 
+class TrabajoEnCola(TrabajoConError):
+    estado: str
+    modelo: str | None  # vacío: el principal
+
+
+class PedidoLlamada(BaseModel):
+    """El último pedido de cola de una llamada, para mostrar su estado."""
+
+    id: int
+    estado: str
+    intentos: int
+    error: str | None
+
+
 class GastoProveedor(BaseModel):
     proveedor: str
     modelo: str
@@ -54,6 +68,45 @@ def estado_cola(sesion: Session) -> dict[str, int]:
             select(TrabajoTranscripcion.estado, func.count()).group_by(TrabajoTranscripcion.estado)
         ).all()
     )
+
+
+def trabajos_abiertos(
+    sesion: Session, zona: ZoneInfo = ZONA_OPERACION_POR_DEFECTO, limite: int = 200
+) -> list[TrabajoEnCola]:
+    """Los pedidos que esperan o se están transcribiendo, el más viejo primero.
+    `error` es el del último intento, si falló alguno."""
+    filas = sesion.execute(
+        select(TrabajoTranscripcion, Llamada)
+        .join(Llamada, TrabajoTranscripcion.llamada_id == Llamada.id)
+        .where(TrabajoTranscripcion.estado.in_([TRABAJO_EN_PROCESO, TRABAJO_PENDIENTE]))
+        .order_by(TrabajoTranscripcion.creado_en)
+        .limit(limite)
+    )
+    return [
+        TrabajoEnCola(
+            id=trabajo.id,
+            llamada_id=llamada.id,
+            llamada=llamada.id_externo,
+            inicio=llamada.inicio.astimezone(zona),
+            intentos=trabajo.intentos,
+            error=trabajo.error or "",
+            estado=trabajo.estado,
+            modelo=trabajo.proveedor,
+        )
+        for trabajo, llamada in filas
+    ]
+
+
+def pedido_de_llamada(sesion: Session, llamada_id: int) -> PedidoLlamada | None:
+    trabajo = sesion.scalar(
+        select(TrabajoTranscripcion)
+        .where(TrabajoTranscripcion.llamada_id == llamada_id)
+        .order_by(TrabajoTranscripcion.id.desc())
+        .limit(1)
+    )
+    if trabajo is None:
+        return None
+    return PedidoLlamada(id=trabajo.id, estado=trabajo.estado, intentos=trabajo.intentos, error=trabajo.error)
 
 
 def trabajos_con_error(

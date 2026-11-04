@@ -230,6 +230,19 @@ def test_la_cola_no_repite_pedidos_y_los_procesa(fabrica, almacen):
     assert transcripcion.encolar([una]) == 1
 
 
+def test_pedir_devuelve_el_pedido_abierto_y_se_procesa_solo_ese(fabrica, almacen):
+    una, otra = guardar_llamada(fabrica, "1"), guardar_llamada(fabrica, "2")
+    transcripcion = servicio(fabrica, almacen)
+    transcripcion.encolar([otra])
+    pedido = transcripcion.pedir(una)
+    assert transcripcion.pedir(una, "falsa") == pedido
+
+    assert transcripcion.procesar_cola(5, trabajo_ids=[pedido]).hechos == 1
+    with unidad_de_trabajo(fabrica) as sesion:
+        assert consultas.pedido_de_llamada(sesion, una).estado == "hecho"
+        assert [t.llamada_id for t in consultas.trabajos_abiertos(sesion)] == [otra]
+
+
 def test_la_cola_reintenta_tres_veces_y_despues_queda_en_error(fabrica, almacen):
     llamada_id = guardar_llamada(fabrica)
     transcripcion = servicio(fabrica, almacen, estrategias={"rota": EstrategiaFalsa(error="caído")})
