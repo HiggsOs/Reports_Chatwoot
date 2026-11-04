@@ -219,6 +219,12 @@ class EstrategiaOpenAI:
                 )
             if respuesta.status_code < 400:
                 return respuesta.json()
+            if respuesta.status_code == 429 and _sin_credito(respuesta):
+                # También es un 429, pero esperar no lo arregla: se pasa al respaldo.
+                raise TranscripcionError(
+                    "OpenAI: la cuenta no tiene crédito. Cárguelo en platform.openai.com › "
+                    "Settings › Billing, o use otro modelo."
+                )
             if respuesta.status_code == 429 or respuesta.status_code >= 500:
                 ultimo_error = f"HTTP {respuesta.status_code}: {respuesta.text[:200]}"
                 time.sleep(self._espera(respuesta, intento))
@@ -281,6 +287,17 @@ class EstrategiaOpenAI:
             return segmentos
         texto = (datos.get("text") or "").strip()
         return [Segmento(hablante=hablante, inicio=None, fin=None, texto=texto)] if texto else []
+
+
+def _sin_credito(respuesta: requests.Response) -> bool:
+    """El 429 de OpenAI por falta de crédito (`insufficient_quota`), no por
+    exceso de pedidos."""
+    try:
+        error = (respuesta.json() or {}).get("error") or {}
+    except ValueError:
+        error = {}
+    codigos = {str(error.get("code") or ""), str(error.get("type") or "")}
+    return "insufficient_quota" in codigos or "no credits" in respuesta.text.lower()
 
 
 def _numero(valor) -> float | None:

@@ -63,12 +63,12 @@ export interface Historial { cliente: ResumenCliente; elementos: ElementoHistori
 export interface Prueba { ok: boolean; mensaje: string }
 export interface ValorAjuste { valor: string; secreto: boolean; origen: "panel" | "entorno" | null }
 
-export interface TrabajoConError { id: number; llamada_id: number; llamada: string; inicio: string; intentos: number; error: string }
-export interface TrabajoEnCola extends TrabajoConError { estado: "pendiente" | "en_proceso"; modelo: string | null }
+export interface TrabajoConError { id: number; llamada_id: number; llamada: string; inicio: string; intentos: number; error: string; modelo: string | null }
+export interface TrabajoEnCola extends TrabajoConError { estado: "pendiente" | "en_proceso" }
 export interface ResumenTranscripcion {
   configurada: boolean; cola: Record<string, number>; gasto_mes_usd: number; tope_mensual_usd: number | null;
   aviso_porcentaje: number; por_ciclo: number; intervalo_minutos: number; auto_min_segundos: number;
-  errores: TrabajoConError[]; abiertos: TrabajoEnCola[]; costo_reintento_usd: number | null;
+  errores: TrabajoConError[]; abiertos: TrabajoEnCola[]; costo_reintento_usd: number | null; modelos: OpcionModelo[];
 }
 export interface FilaGasto {
   proveedor: string; modelo: string; titulo: string; minutos_panel: number; usd_estimado: number | null;

@@ -178,6 +178,16 @@ def test_openai_reintenta_429_y_5xx(sin_esperas):
 
 
 @responses.activate
+def test_openai_sin_credito_no_se_reintenta(sin_esperas):
+    responses.post(URL, status=429, json={"error": {
+        "message": "You have no credits remaining. Add credits to continue using the API.",
+        "type": "insufficient_quota", "code": "insufficient_quota"}})
+    with pytest.raises(TranscripcionError, match="no tiene crédito"):
+        openai().transcribir(AUDIO, OPCIONES)
+    assert len(responses.calls) == 1 and sin_esperas == []
+
+
+@responses.activate
 def test_openai_se_rinde_tras_tres_intentos():
     for _ in range(3):
         responses.post(URL, status=500, body="caído")

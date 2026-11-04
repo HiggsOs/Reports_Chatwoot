@@ -191,6 +191,8 @@ class Resumen(BaseModel):
     errores: list[consultas.TrabajoConError]
     abiertos: list[consultas.TrabajoEnCola]
     costo_reintento_usd: float | None
+    # Los modelos activos, para reintentar un pedido con otro.
+    modelos: list[OpcionModelo] = []
 
 
 @router.get("/transcripcion/resumen", response_model=Resumen)
@@ -212,16 +214,53 @@ def resumen(c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)) -
         errores=errores,
         abiertos=consultas.trabajos_abiertos(s),
         costo_reintento_usd=float(costo) if costo is not None else None,
+        modelos=_opciones(c.transcripcion, []) if c.transcripcion is not None else [],
     )
 
 
+class Reintento(BaseModel):
+    # Sin `cambiar_modelo`, cada pedido conserva su modelo. Con él, pasa a
+    # `proveedor` («deepgram:nova-3»); vacío: el principal y los de respaldo.
+    cambiar_modelo: bool = False
+    proveedor: str | None = None
+
+
+def _validar_modelo(servicio: ServicioTranscripcion, reintento: Reintento) -> None:
+    if reintento.cambiar_modelo and reintento.proveedor and reintento.proveedor not in servicio.estrategias:
+        raise HTTPException(422, "Ese modelo no está activo: actívelo en Configuración.")
+
+
+def _procesar_pedidos(servicio: ServicioTranscripcion, trabajo_ids: list[int]) -> None:
+    servicio.procesar_cola(len(trabajo_ids), trabajo_ids=trabajo_ids)
+
+
 @router.post("/transcripcion/reintentar", response_model=Encolado)
-def reintentar(c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)) -> Encolado:
+def reintentar(
+    tareas: BackgroundTasks, reintento: Reintento | None = None,
+    c: Contenedor = Depends(contenedor), s: Session = Depends(sesion),
+) -> Encolado:
+    """Vuelve a intentar todas las que fallaron, ya mismo y en segundo plano."""
+    reintento = reintento or Reintento()
     servicio = _servicio(c)
-    errores = consultas.trabajos_con_error(s)
-    for error in errores:
-        servicio.reintentar(error.id)
-    return Encolado(encoladas=len(errores), costo_usd=None)
+    _validar_modelo(servicio, reintento)
+    ids = [e.id for e in consultas.trabajos_con_error(s)
+           if servicio.reintentar(e.id, reintento.proveedor, reintento.cambiar_modelo)]
+    if ids:
+        tareas.add_task(_procesar_pedidos, servicio, ids)
+    return Encolado(encoladas=len(ids), costo_usd=None)
+
+
+@router.post("/transcripcion/trabajos/{trabajo_id}/reintentar", response_model=Encolado)
+def reintentar_uno(
+    trabajo_id: int, reintento: Reintento, tareas: BackgroundTasks, c: Contenedor = Depends(contenedor)
+) -> Encolado:
+    """Vuelve a intentar un pedido (con error o esperando), si se pide con otro modelo."""
+    servicio = _servicio(c)
+    _validar_modelo(servicio, reintento)
+    if not servicio.reintentar(trabajo_id, reintento.proveedor, reintento.cambiar_modelo):
+        raise HTTPException(409, "Ese pedido ya terminó o se está transcribiendo.")
+    tareas.add_task(_procesar_pedidos, servicio, [trabajo_id])
+    return Encolado(encoladas=1, costo_usd=None)
 
 
 class FilaGasto(BaseModel):
