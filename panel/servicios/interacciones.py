@@ -352,14 +352,24 @@ class ServicioInteracciones:
         return resumen
 
     def simular_regla(
-        self, cuenta_id: int, estrategia: str, parametros, vigente_desde: datetime
+        self, cuenta_id: int, estrategia: str, parametros, vigente_desde: datetime,
+        corregir_posteriores: bool = False,
     ) -> ResumenReasignacion:
         """Qué pasaría con las interacciones si se guardara la regla, sin
         guardar nada. Lanza ReglaInvalida igual que crear_regla."""
         punto = self._sesion.begin_nested()
         try:
-            self.asignacion.crear_regla(cuenta_id, estrategia, parametros, vigente_desde)
+            self.asignacion.crear_regla(cuenta_id, estrategia, parametros, vigente_desde, corregir_posteriores)
             return self.reasignar_cuenta(cuenta_id, vigente_desde)
+        finally:
+            punto.rollback()
+            self.asignacion.olvidar(cuenta_id)
+
+    def simular_reasignacion(self, cuenta_id: int, desde: datetime) -> ResumenReasignacion:
+        """Qué cambiaría al volver a calcular la asignación, sin guardar nada."""
+        punto = self._sesion.begin_nested()
+        try:
+            return self.reasignar_cuenta(cuenta_id, desde)
         finally:
             punto.rollback()
             self.asignacion.olvidar(cuenta_id)

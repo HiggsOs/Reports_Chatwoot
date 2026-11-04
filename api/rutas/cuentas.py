@@ -129,6 +129,17 @@ class NuevaRegla(BaseModel):
     desde_siempre: bool = False
     desde: date | None = None
     previa: bool = True  # True: solo simula
+    # Puede empezar antes que la última regla: reemplaza a las que empezaban
+    # desde esa fecha (quedan como «corregida, nunca rigió»).
+    corregir: bool = False
+
+
+def _desde(servicio: ServicioInteracciones, desde_siempre: bool, desde: date | None) -> datetime:
+    if desde_siempre:
+        return DESDE_SIEMPRE
+    if desde is not None:
+        return servicio.asignacion.inicio_del_dia(desde)
+    raise HTTPException(422, "Indique desde qué fecha.")
 
 
 @router.post("/cuentas/{cuenta_id}/reglas", response_model=ResumenReasignacion)
@@ -136,19 +147,37 @@ def nueva_regla(cuenta_id: int, datos: NuevaRegla, s: Session = Depends(sesion))
     if RepositorioCuentas(s).obtener(cuenta_id) is None:
         raise HTTPException(404, "La cuenta no existe.")
     servicio = ServicioInteracciones(s)
-    if datos.desde_siempre:
-        vigente_desde = DESDE_SIEMPRE
-    elif datos.desde is not None:
-        vigente_desde = servicio.asignacion.inicio_del_dia(datos.desde)
-    else:
-        raise HTTPException(422, "Indique desde cuándo vale la regla.")
+    vigente_desde = _desde(servicio, datos.desde_siempre, datos.desde)
     try:
         if datos.previa:
-            return servicio.simular_regla(cuenta_id, datos.estrategia, datos.parametros, vigente_desde)
-        servicio.asignacion.crear_regla(cuenta_id, datos.estrategia, datos.parametros, vigente_desde)
+            return servicio.simular_regla(
+                cuenta_id, datos.estrategia, datos.parametros, vigente_desde, datos.corregir
+            )
+        servicio.asignacion.crear_regla(
+            cuenta_id, datos.estrategia, datos.parametros, vigente_desde, datos.corregir
+        )
         return servicio.reasignar_cuenta(cuenta_id, vigente_desde)
     except ReglaInvalida as error:
         raise HTTPException(422, " ".join(error.errores)) from error
+
+
+class Recalculo(BaseModel):
+    desde_siempre: bool = False
+    desde: date | None = None
+    previa: bool = True  # True: solo simula
+
+
+@router.post("/cuentas/{cuenta_id}/reasignar", response_model=ResumenReasignacion)
+def recalcular(cuenta_id: int, datos: Recalculo, s: Session = Depends(sesion)) -> ResumenReasignacion:
+    """Vuelve a calcular la asignación automática de la cuenta desde esa fecha
+    con las reglas guardadas. Las asignadas a mano no se tocan."""
+    if RepositorioCuentas(s).obtener(cuenta_id) is None:
+        raise HTTPException(404, "La cuenta no existe.")
+    servicio = ServicioInteracciones(s)
+    desde = _desde(servicio, datos.desde_siempre, datos.desde)
+    if datos.previa:
+        return servicio.simular_reasignacion(cuenta_id, desde)
+    return servicio.reasignar_cuenta(cuenta_id, desde)
 
 
 class Actualizacion(BaseModel):

@@ -280,6 +280,26 @@ def test_cuentas_y_reglas(con_sesion):
     estrategias = con_sesion.get("/api/estrategias").json()
     assert {e["nombre"] for e in estrategias} >= {"dueno_unico", "fijo_y_resto", "franjas_completas"}
 
+    # Volver a calcular: la previa no cambia nada; aplicar sí.
+    hoy = date.today().isoformat()
+    recalculo = {"desde": (date.today() - timedelta(days=7)).isoformat()}
+    previa = con_sesion.post(f"/api/cuentas/{compartida['id']}/reasignar", json=recalculo, headers=CABECERA).json()
+    assert previa["revisadas"] == 1 and previa["cambiaron"] == 0
+    hecho = con_sesion.post(f"/api/cuentas/{compartida['id']}/reasignar", json={**recalculo, "previa": False},
+                            headers=CABECERA).json()
+    assert hecho["revisadas"] == 1
+    assert con_sesion.post(f"/api/cuentas/{compartida['id']}/reasignar", json={}, headers=CABECERA).status_code == 422
+
+    # Corregir hacia atrás: sin marcarlo no deja empezar antes de la última regla.
+    otra = {"estrategia": "dueno_unico", "parametros": {"persona_id": persona}, "desde": hoy, "previa": False}
+    assert con_sesion.post(f"/api/cuentas/{compartida['id']}/reglas", json=otra, headers=CABECERA).status_code == 200
+    antes = {**otra, "desde": (date.today() - timedelta(days=3)).isoformat()}
+    assert con_sesion.post(f"/api/cuentas/{compartida['id']}/reglas", json=antes, headers=CABECERA).status_code == 422
+    r = con_sesion.post(f"/api/cuentas/{compartida['id']}/reglas", json={**antes, "corregir": True}, headers=CABECERA)
+    assert r.status_code == 200
+    historial = con_sesion.get(f"/api/cuentas/{compartida['id']}").json()["historial"]
+    assert any(h["hasta"] == "corregida, nunca rigió" for h in historial)
+
 
 def test_asesores(con_sesion):
     r = con_sesion.put("/api/asesores", json={"asesores": [
