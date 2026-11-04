@@ -301,6 +301,13 @@ def test_cuentas_y_reglas(con_sesion):
     assert any(h["hasta"] == "corregida, nunca rigió" for h in historial)
 
 
+def test_revisar_los_chats_sin_asignar(con_sesion):
+    # El chat de prueba solo tiene un mensaje del cliente: no hay a quién asignarlo.
+    r = con_sesion.post("/api/sin-asignar/revisar", headers=CABECERA)
+    assert r.status_code == 200
+    assert (r.json()["revisadas"], r.json()["cambiaron"]) == (1, 0)
+
+
 def test_asesores(con_sesion):
     r = con_sesion.put("/api/asesores", json={"asesores": [
         {"correo": "ana@x.es", "area": "Comercial", "nombre": "Ana"},

@@ -111,7 +111,7 @@ def test_chatwoot_crea_la_regla_por_correo(fabrica):
     resumen = actualizar(
         fabrica, "chatwoot", externa("3", "Ana", "ana@e.com"), externa("4", "Otro", "otro@e.com")
     )
-    assert resumen.reglas_automaticas == 1
+    assert resumen.reglas_automaticas == 1 and len(resumen.cuentas_con_regla_nueva) == 1
 
     with unidad_de_trabajo(fabrica) as sesion:
         cuenta_ana = RepositorioCuentas(sesion).de_plataforma("chatwoot")["3"]

@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api/cliente";
-import type { FilaInteraccion, Listado, TipoInteraccion } from "../api/tipos";
+import type { FilaInteraccion, Listado, ResumenReasignacion, TipoInteraccion } from "../api/tipos";
 import { Aviso, Boton, Cabecera, Cargando, ErrorCarga, Icono, Insignia, Tarjeta } from "../componentes/basicos";
 import { Seleccion, Texto } from "../componentes/campos";
 import { Tabla } from "../componentes/Tabla";
@@ -50,6 +50,7 @@ export default function SinAsignar() {
       <Tarjeta padding style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
         <div style={{ width: 170 }}><Texto etiqueta="Desde" type="date" value={desde} max={hasta} onChange={(e) => setDesde(e.target.value)} /></div>
         <div style={{ width: 170 }}><Texto etiqueta="Hasta" type="date" value={hasta} min={desde} onChange={(e) => setHasta(e.target.value)} /></div>
+        <RevisarChats />
       </Tarjeta>
 
       {cargando ? <Cargando filas={5} texto="Buscando interacciones sin asesor…" />
@@ -121,5 +122,29 @@ function Bandeja({ tipo, titulo, plural, icono, filas, personas }: {
           { titulo: "Teléfono", celda: (f) => <span className="mono">{telefono(f.telefono)}</span> },
         ]} />
     </Tarjeta>
+  );
+}
+
+// Vuelve a mirar todos los chats sin asesor: el que más mensajes envió, por su
+// regla o por su correo. Útil tras cargar asesores o reglas.
+function RevisarChats() {
+  const avisar = useAvisos();
+  const cliente = useQueryClient();
+  const revisar = useMutation({
+    mutationFn: () => api.post<ResumenReasignacion>("/api/sin-asignar/revisar"),
+    onSuccess: (r) => {
+      const asignadas = Object.entries(r.por_persona).filter(([p]) => p !== "Sin asignar");
+      avisar(r.cambiaron
+        ? `Se asignaron ${entero(r.cambiaron)} de ${entero(r.revisadas)} chats sin asesor: ${asignadas.map(([p, n]) => `${p}: ${entero(n)}`).join(" · ")}.`
+        : `Se revisaron ${entero(r.revisadas)} chats sin asesor: ninguno se pudo asignar. Mire el motivo de cada uno.`);
+      ["interacciones", "inicio", "cuentas"].forEach((k) => cliente.invalidateQueries({ queryKey: [k] }));
+    },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  return (
+    <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <Boton icono="manage_search" cargando={revisar.isPending} onClick={() => revisar.mutate()}>Revisar de nuevo los chats sin asignar</Boton>
+      <span className="cap">Los asigna al asesor que más mensajes envió (todas las fechas).</span>
+    </div>
   );
 }
