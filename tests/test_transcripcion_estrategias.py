@@ -282,7 +282,9 @@ def test_deepgram_pide_lo_que_corresponde_y_traduce():
     assert llamada.request.body == b"ID3 audio"
     parametros = _parametros(llamada)
     assert parametros["model"] == ["nova-3"] and parametros["language"] == ["es"]
-    assert parametros["diarize"] == ["true"] and parametros["utterances"] == ["true"]
+    # `diarize_model`, no el `diarize=true` obsoleto (SDK oficial de Deepgram).
+    assert parametros["diarize_model"] == ["latest"] and "diarize" not in parametros
+    assert parametros["utterances"] == ["true"]
     assert parametros["keyterm"] == ["grúa", "Mapfre"] and "keywords" not in parametros
 
     assert [(s.etiqueta, s.inicio, s.fin, s.texto) for s in resultado.segmentos] == [
@@ -300,7 +302,7 @@ def test_deepgram_un_canal_no_separa_hablantes_y_nova2_usa_keywords():
     canal = AUDIO.model_copy(update={"hablante": "cliente"})
     resultado = deepgram(modelo="nova-2").transcribir(canal, OPCIONES)
     parametros = _parametros(responses.calls[0])
-    assert parametros["diarize"] == ["false"]
+    assert "diarize" not in parametros and "diarize_model" not in parametros
     assert parametros["keywords"] == ["grúa", "Mapfre"] and "keyterm" not in parametros
     assert {(s.hablante, s.etiqueta) for s in resultado.segmentos} == {("cliente", None)}
 
@@ -490,3 +492,38 @@ def test_deepgram_sin_hablante_por_palabra_usa_las_utterances():
     palabras = [{"word": "hola", "punctuated_word": "Hola.", "start": 0.0, "end": 0.3}]
     responses.post(URL_DEEPGRAM, json=_con_palabras(palabras, DEEPGRAM["results"]["utterances"]))
     assert [s.etiqueta for s in deepgram().transcribir(AUDIO, OPCIONES).segmentos] == ["A", "B"]
+
+
+
+@responses.activate
+def test_deepgram_usa_las_palabras_de_las_utterances_que_traen_puntuacion():
+    # Como en los tipos del SDK: las palabras del canal no traen `punctuated_word`;
+    # las de las utterances sí.
+    def palabra(texto, puntuada, inicio, hablante):
+        return {"word": texto, "punctuated_word": puntuada, "start": inicio, "end": inicio + 0.3, "speaker": hablante}
+
+    utterance_words = [palabra("hola", "Hola,", 0.0, 0), palabra("grúas", "grúas.", 0.4, 0),
+                       palabra("hola", "Hola,", 1.0, 1), palabra("buenas", "buenas.", 1.4, 1)]
+    canal = [{k: v for k, v in p.items() if k != "punctuated_word"} for p in utterance_words]
+    responses.post(URL_DEEPGRAM, json={"metadata": {"duration": 2.0, "diarize_info": {"model": "v2"}}, "results": {
+        "channels": [{"alternatives": [{"transcript": "hola grúas hola buenas", "words": canal}]}],
+        "utterances": [{"start": 0.0, "end": 1.7, "speaker": 0, "transcript": "Hola, grúas. Hola, buenas.",
+                        "words": utterance_words}]}})
+    segmentos = deepgram().transcribir(AUDIO, OPCIONES).segmentos
+    assert [(s.etiqueta, s.texto) for s in segmentos] == [("A", "Hola, grúas."), ("B", "Hola, buenas.")]
+
+
+@responses.activate
+def test_deepgram_si_no_acepta_diarize_model_usa_el_parametro_viejo():
+    responses.post(URL_DEEPGRAM, status=400, body='{"err_msg": "Unknown parameter: diarize_model"}')
+    responses.post(URL_DEEPGRAM, json=DEEPGRAM)
+    assert deepgram().transcribir(AUDIO, OpcionesTranscripcion(idioma="es")).segmentos
+    assert _parametros(responses.calls[0])["diarize_model"] == ["latest"]
+    segundo = _parametros(responses.calls[1])
+    assert segundo["diarize"] == ["true"] and "diarize_model" not in segundo
+
+
+def test_deepgram_diarizador_configurable():
+    estrategia = registro.crear("deepgram", {"DEEPGRAM_API_KEY": "dg", "DEEPGRAM_DIARIZADOR": "v1"})
+    parametros = dict(estrategia._parametros(AUDIO, OpcionesTranscripcion(idioma="es"), False))
+    assert parametros["diarize_model"] == "v1"
