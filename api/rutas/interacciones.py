@@ -15,12 +15,14 @@ from panel.db.modelos import Conversacion, Llamada
 from panel.db.repositorios.cuentas import RepositorioCuentas
 from panel.db.repositorios.personas import RepositorioPersonas
 from panel.esquemas.personas import PersonaResumida
+from panel.exportar import TIPO_XLSX
 from panel.servicios import clientes, consultas
 from panel.servicios.interacciones import ServicioInteracciones
 
 router = APIRouter(prefix="/api", tags=["interacciones"])
 
 Tipo = Literal["llamada", "conversacion"]
+Formato = Literal["csv", "xlsx"]
 LISTAR = {"llamada": consultas.listar_llamadas, "conversacion": consultas.listar_conversaciones}
 MODELOS = {"llamada": Llamada, "conversacion": Conversacion}
 PLATAFORMA = {"llamada": "cloudtalk", "conversacion": "chatwoot"}
@@ -100,19 +102,23 @@ def listar(tipo: Tipo, filtros: consultas.Filtros = Depends(_parametros), s: Ses
     return Listado(filas=filas, limite=consultas.LIMITE_FILAS, recortado=len(filas) >= consultas.LIMITE_FILAS)
 
 
-@router.get("/interacciones/{tipo}/csv")
-def descargar_csv(tipo: Tipo, filtros: consultas.Filtros = Depends(_parametros), s: Session = Depends(sesion)):
+@router.get("/interacciones/{tipo}/{formato}")
+def descargar(
+    tipo: Tipo, formato: Formato, filtros: consultas.Filtros = Depends(_parametros), s: Session = Depends(sesion)
+):
+    """El listado con los mismos filtros, en CSV o en Excel (.xlsx)."""
     filas = LISTAR[tipo](s, filtros)
     if tipo == "llamada":
         filas = consultas.con_transcripciones(s, filas)
     else:
         filas = consultas.con_textos_de_chat(s, filas)
-    nombre = f"{'llamadas' if tipo == 'llamada' else 'conversaciones'}_{filtros.desde:%Y-%m-%d}.csv"
-    return Response(
-        consultas.a_csv(filas, COLUMNAS_CSV[tipo]),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
-    )
+    base = "llamadas" if tipo == "llamada" else "conversaciones"
+    nombre = f"{base}_{filtros.desde:%Y-%m-%d}.{formato}"
+    if formato == "xlsx":
+        contenido, tipo_mime = consultas.a_excel(filas, COLUMNAS_CSV[tipo], base.capitalize()), TIPO_XLSX
+    else:
+        contenido, tipo_mime = consultas.a_csv(filas, COLUMNAS_CSV[tipo]), "text/csv; charset=utf-8"
+    return Response(contenido, media_type=tipo_mime, headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
 
 
 class Asignacion(BaseModel):

@@ -22,6 +22,7 @@ from panel.db.modelos import (
     ReglaAsignacion,
     TranscripcionGuardada,
 )
+from panel import exportar
 from panel.servicios.clientes import mensajes_legibles
 from reporte import traducir_estado
 
@@ -323,6 +324,11 @@ def a_csv(filas: list[BaseModel], columnas: dict[str, str]) -> bytes:
     memoria = io.StringIO()
     datos.to_csv(memoria, index=False, lineterminator="\r\n")
     return ("﻿" + memoria.getvalue()).encode("utf-8")
+
+
+def a_excel(filas: list[BaseModel], columnas: dict[str, str], hoja: str) -> bytes:
+    """Lo mismo que `a_csv`, en un libro de Excel."""
+    return exportar.a_excel(list(columnas.values()), ([getattr(f, a) for a in columnas] for f in filas), hoja)
 
 
 def audios_por_vencer(sesion: Session, ahora: datetime, retencion_dias: int, aviso_dias: int = 7) -> int:

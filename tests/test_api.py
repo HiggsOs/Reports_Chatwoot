@@ -143,6 +143,19 @@ def test_csv(con_sesion):
     r = con_sesion.get("/api/interacciones/llamada/csv", params=_rango())
     assert r.status_code == 200 and "Texto de la transcripción" in r.text.splitlines()[0]
 
+    import io
+
+    from openpyxl import load_workbook
+
+    for tipo, encabezado in (("llamada", "Id CloudTalk"), ("conversacion", "Id Chatwoot")):
+        r = con_sesion.get(f"/api/interacciones/{tipo}/xlsx", params=_rango())
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
+        assert r.headers["content-disposition"].endswith('.xlsx"')
+        hoja = load_workbook(io.BytesIO(r.content)).active
+        assert hoja["A1"].value == encabezado and hoja.max_row == 2
+    assert con_sesion.get("/api/interacciones/llamada/pdf", params=_rango()).status_code == 422
+
 
 def test_asignar_en_bloque(con_sesion):
     conversacion = con_sesion.get("/api/interacciones/conversacion", params=_rango()).json()["filas"][0]
@@ -345,6 +358,15 @@ def test_reporte_chatwoot(entorno, datos, tmp_path, monkeypatch):
         assert csv.status_code == 200
         assert f"reporte-chatwoot-{hoy}-a-{hoy}.csv" in csv.headers["content-disposition"]
         assert csv.content.decode("utf-8-sig").splitlines()[0].startswith("conversacion_id,asesor")
+        excel = cliente.get(f"/api/reportes/chatwoot/{trabajo_id}/xlsx")
+        assert excel.status_code == 200
+        assert f"reporte-chatwoot-{hoy}-a-{hoy}.xlsx" in excel.headers["content-disposition"]
+        import io
+
+        from openpyxl import load_workbook
+
+        hoja = load_workbook(io.BytesIO(excel.content)).active
+        assert [hoja["A1"].value, hoja["B1"].value] == ["conversacion_id", "asesor"] and hoja.max_row == 3
         assert cliente.get("/api/reportes/chatwoot/no-existe").status_code == 404
 
 

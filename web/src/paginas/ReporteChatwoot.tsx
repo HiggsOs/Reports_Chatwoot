@@ -6,7 +6,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../api/cliente";
 import type { EstadoConfig } from "../api/tipos";
-import { Aviso, Boton, BotonEnlace, Cabecera, Tarjeta } from "../componentes/basicos";
+import { Aviso, Boton, BotonDescarga, Cabecera, Tarjeta } from "../componentes/basicos";
 import { Texto } from "../componentes/campos";
 import { Tabla } from "../componentes/Tabla";
 import { diaIso, entero } from "../utilidades/formato";
@@ -102,7 +102,7 @@ export default function ReporteChatwoot() {
             <Tarjeta>
               <div className="tarjeta-cab">
                 <span><b>{entero(datos.filas.length)}</b> conversaciones del {datos.desde} al {datos.hasta}.</span>
-                <BotonEnlace a={`/api/reportes/chatwoot/${datos.id}/csv`} externo variante="primario" icono="download">Descargar CSV</BotonEnlace>
+                <BotonDescarga ruta={(formato) => `/api/reportes/chatwoot/${datos.id}/${formato}`} variante="primario" />
               </div>
               <Tabla filas={datos.filas} clave={(f) => f.conversacion_id} alto={520}
                 columnas={COLUMNAS.map(({ clave, titulo }) => ({ titulo, celda: (f: Fila) => f[clave] || "—" }))} />
