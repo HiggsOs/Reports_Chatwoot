@@ -169,6 +169,53 @@ def test_el_csv_de_llamadas_trae_el_texto_de_la_transcripcion_principal(fabrica,
     }
 
 
+def test_el_csv_de_chats_trae_los_mensajes_con_sus_finalizaciones(fabrica, datos):
+    import csv
+    import io
+
+    from sqlalchemy import select
+
+    from panel.db.modelos import Conversacion
+
+    epoch = int(INICIO.timestamp())  # 10:00 en Madrid
+    with unidad_de_trabajo(fabrica) as sesion:
+        chat = sesion.scalar(select(Conversacion).where(Conversacion.id_externo == "9"))
+        chat.mensajes = [
+            {"id": 2, "message_type": 1, "content": "Buenos días,\nle ayudo.", "created_at": epoch + 60,
+             "sender": {"name": "Rosa"}},
+            {"id": 1, "message_type": 0, "content": "Necesito una grúa", "created_at": epoch,
+             "sender": {"name": "Juan"}},
+            {"id": 3, "message_type": 2, "content": "Conversación resuelta", "created_at": epoch + 120},
+            {"id": 4, "message_type": 1, "private": True, "content": "Cliente habitual", "created_at": epoch + 180,
+             "sender": {"name": "Rosa"}},
+            {"id": 5, "message_type": 0, "content": None, "created_at": epoch + 240,
+             "attachments": [{"file_type": "image"}]},
+        ]
+        comunes = {"canal": "WhatsApp", "estado": "resolved", "direccion": "Entrante", "datos_origen": {}}
+        sesion.add_all([
+            # La finalización: un mensaje del cliente que se suma al chat de arriba.
+            Conversacion(id_externo="10", inicio=INICIO + timedelta(hours=2), continua_de_id=chat.id,
+                         mensajes=[{"id": 9, "message_type": 0, "content": "Gracias", "created_at": epoch + 7200}],
+                         **comunes),
+            Conversacion(id_externo="11", inicio=INICIO + timedelta(hours=3), mensajes=None, **comunes),
+        ])
+
+    with unidad_de_trabajo(fabrica) as sesion:
+        filas = consultas.con_textos_de_chat(sesion, consultas.listar_conversaciones(sesion, filtros()))
+    contenido = consultas.a_csv(filas, {"id_externo": "Id", "chat_texto": "Texto"})
+    leidas = {f["Id"]: f["Texto"] for f in csv.DictReader(io.StringIO(contenido.decode("utf-8-sig")))}
+    assert leidas == {
+        "9": "\n".join([
+            "[03/11 10:00] Cliente (Juan): Necesito una grúa",
+            "[03/11 10:01] Asesor (Rosa): Buenos días, le ayudo.",
+            "[03/11 10:03] Nota interna (Rosa): Cliente habitual",
+            "[03/11 10:04] Cliente: [adjunto: image]",
+            "[03/11 12:00] Cliente: Gracias",
+        ]),
+        "11": "(los mensajes todavía no están guardados)",
+    }
+
+
 def test_sync_rechaza_una_fecha_invalida():
     with pytest.raises(SystemExit) as salida:
         main(["--desde", "2026-13-01"])
