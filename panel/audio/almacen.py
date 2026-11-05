@@ -8,6 +8,7 @@ otra implementación y cambiar ALMACEN_TIPO.
 import base64
 import hashlib
 import posixpath
+import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
@@ -109,8 +110,7 @@ class AlmacenSFTP:
     @contextmanager
     def _conexion(self) -> Iterator[paramiko.SFTPClient]:
         try:
-            transporte = paramiko.Transport((self._host, self._puerto))
-            transporte.banner_timeout = TIEMPO_LIMITE_SEGUNDOS
+            transporte = _transporte(self._host, self._puerto)
         except (OSError, paramiko.SSHException) as error:
             raise AlmacenError(f"No se pudo conectar con {self._host}:{self._puerto}: {error}") from error
         try:
@@ -192,9 +192,23 @@ class AlmacenSFTP:
                 raise AlmacenError(f"No se pudo borrar {ruta}: {error}") from error
 
 
+def _transporte(host: str, puerto: int) -> paramiko.Transport:
+    """Abre la conexión con un tiempo límite. Paramiko, con (host, puerto),
+    conecta sin límite: si un firewall descarta los paquetes, cada intento
+    espera lo que diga el sistema (unos dos minutos en Linux)."""
+    conexion = socket.create_connection((host, puerto), timeout=TIEMPO_LIMITE_SEGUNDOS)
+    try:
+        transporte = paramiko.Transport(conexion)
+    except Exception:
+        conexion.close()
+        raise
+    transporte.banner_timeout = TIEMPO_LIMITE_SEGUNDOS
+    return transporte
+
+
 def obtener_huella(host: str, puerto: int) -> str:
     """La huella que presenta el servidor, para cargarla en SFTP_HUELLA_HOST."""
-    transporte = paramiko.Transport((host, puerto))
+    transporte = _transporte(host, puerto)
     try:
         transporte.start_client(timeout=TIEMPO_LIMITE_SEGUNDOS)
         return huella_sha256(transporte.get_remote_server_key())

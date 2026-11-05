@@ -178,8 +178,19 @@ def test_si_falla_la_subida_queda_pendiente_y_se_reintenta(fabrica, tmp_path):
         assert (fila.intentos, fila.ultimo_error) == (1, "el servidor no responde")
 
     almacen.falla = False
-    assert audio.subir_pendientes().model_dump() == {"subidos": 1, "fallidos": 0}
+    assert audio.subir_pendientes().model_dump() == {"subidos": 1, "fallidos": 0, "sin_intentar": 0}
     assert llamada(fabrica, llamada_id)[0] == "guardado"
+
+
+def test_si_el_almacen_no_responde_no_se_insiste_con_cada_audio(fabrica, tmp_path):
+    almacen = AlmacenQueFalla(tmp_path / "audios")
+    audio = servicio(fabrica, FuenteFalsa(wav()), almacen)
+    for n in ("1", "2", "3"):
+        audio.escuchar(guardar_llamada(fabrica, id_externo=n))
+    # Un solo intento por ciclo: los demás esperan al próximo.
+    assert audio.subir_pendientes().model_dump() == {"subidos": 0, "fallidos": 1, "sin_intentar": 2}
+    almacen.falla = False
+    assert audio.subir_pendientes().model_dump() == {"subidos": 3, "fallidos": 0, "sin_intentar": 0}
 
 
 def test_si_el_almacen_pierde_el_archivo_se_trae_de_nuevo(fabrica, almacen):
@@ -229,7 +240,7 @@ def test_las_tareas_suben_pendientes_y_la_retencion_corre_una_vez_por_dia(fabric
     almacen.falla = False
 
     resultado = SubirAudiosPendientes(fabrica, audio, ahora=lambda: AHORA).ejecutar()
-    assert resultado.resumen == {"subidos": 1, "fallidos": 0}
+    assert resultado.resumen == {"subidos": 1, "fallidos": 0, "sin_intentar": 0}
 
     retencion = RetencionDeAudios(fabrica, audio, ahora=lambda: AHORA)
     assert retencion.ejecutar().resumen == {"borrados": 0, "fallidos": 0}

@@ -58,6 +58,8 @@ class ResultadoAudio(BaseModel):
 class ResumenSubidas(BaseModel):
     subidos: int = 0
     fallidos: int = 0
+    # Quedan para el próximo ciclo sin intentarlo: el almacén ya falló en este.
+    sin_intentar: int = 0
 
 
 class ResumenRetencion(BaseModel):
@@ -209,11 +211,15 @@ class ServicioAudio:
         with unidad_de_trabajo(self._fabrica) as sesion:
             ids = list(sesion.scalars(select(AudioPendiente.llamada_id).order_by(AudioPendiente.creado_en)))
         resumen = ResumenSubidas()
-        for llamada_id in ids:
+        for posicion, llamada_id in enumerate(ids):
             if self.subir_pendiente(llamada_id):
                 resumen.subidos += 1
             else:
+                # Si el almacén no responde, probar con cada audio frenaría el
+                # ciclo (y la cola de transcripción, que va después) un buen rato.
                 resumen.fallidos += 1
+                resumen.sin_intentar = len(ids) - posicion - 1
+                break
         return resumen
 
     # --- Retención -----------------------------------------------------------
@@ -241,9 +247,10 @@ class ServicioAudio:
                 try:
                     self._almacen.borrar(ruta)
                 except AlmacenError as error:
+                    # Como al subir: si el almacén no responde, se sigue mañana.
                     registro.warning("No se pudo borrar %s: %s", ruta, error)
                     resumen.fallidos += 1
-                    continue
+                    break
             with unidad_de_trabajo(self._fabrica) as sesion:
                 llamada = sesion.get(Llamada, llamada_id)
                 llamada.audio_estado = AUDIO_ELIMINADO

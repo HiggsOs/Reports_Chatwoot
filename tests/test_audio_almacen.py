@@ -99,3 +99,31 @@ def test_obtener_huella(servidor, capsys):
     assert huella_main(["127.0.0.1", str(servidor.puerto)]) == 0
     assert capsys.readouterr().out.strip() == esperada
     assert huella_main(["solo-host"]) == 2
+
+
+def test_la_conexion_tiene_tiempo_limite(monkeypatch, capsys):
+    import socket
+
+    from panel.audio import almacen as modulo
+
+    pedidos = []
+
+    def conectar(direccion, timeout=None):
+        pedidos.append((direccion, timeout))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(modulo.socket, "create_connection", conectar)
+    with pytest.raises(AlmacenError, match="No se pudo conectar"):
+        AlmacenSFTP("10.0.0.1", 8023, USUARIO, CLAVE, "/audios", "SHA256:x").existe("x.mp3")
+    assert pedidos == [(("10.0.0.1", 8023), modulo.TIEMPO_LIMITE_SEGUNDOS)]
+
+    # La herramienta de la huella explica qué pasa en lugar de un traceback.
+    assert huella_main(["10.0.0.1", "8023"]) == 1
+    assert "firewall" in capsys.readouterr().err
+
+    def sin_dns(direccion, timeout=None):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(modulo.socket, "create_connection", sin_dns)
+    assert huella_main(["alliavia.example", "8023"]) == 1
+    assert "No existe el nombre" in capsys.readouterr().err
