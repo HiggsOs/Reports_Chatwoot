@@ -167,7 +167,9 @@ python generar_hash.py 'la-contraseña-elegida'
    sh -c "alembic upgrade head && python -m panel.sync"
    ```
 
-   Corre un ciclo cada `SYNC_INTERVALO_MINUTOS`. Si los dos servicios arrancan a
+   El comando va en el campo **Comando** de la sección *Implementar* del
+   servicio (no en un Script, que corre una sola vez). Corre un ciclo cada
+   `SYNC_INTERVALO_MINUTOS`. Si los dos servicios arrancan a
    la vez, las migraciones esperan una a la otra.
 
 Al arrancar, el contenedor aplica las migraciones pendientes
@@ -383,6 +385,14 @@ transcribe de a `TRANSCRIPCION_POR_CICLO` por ciclo y reintenta tres veces cada
 una. La página *Transcripción* muestra la cola, los errores (con un botón para
 reintentar), lo gastado en el mes y dos transcripciones de la misma llamada lado
 a lado.
+
+**La cola la transcribe el servicio de sincronización**, no la app: si ese
+servicio está apagado, o corre sin poder leer la clave del proveedor (por
+ejemplo, porque no tiene la misma `PANEL_CLAVE_CIFRADO` o `APP_COOKIE_KEY` que la
+app), los pedidos se quedan en cola sin ningún error. La página *Transcripción*
+lo avisa en rojo cuando hay pedidos esperando y la cola no avanzó en más de
+tres ciclos (o una hora), y *Transcribir la cola ahora* la procesa desde la app
+mientras tanto, respetando el tope mensual.
 
 **Quién habla.** Antes de transcribir se mira la grabación:
 

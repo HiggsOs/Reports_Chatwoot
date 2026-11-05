@@ -1,7 +1,9 @@
 """Transcripción: la de cada llamada, la cola, el gasto y la configuración."""
 
 import json
-from datetime import date, datetime
+import logging
+import threading
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
@@ -15,6 +17,7 @@ from config import ConfigError, ModeloTranscripcion
 from panel.ajustes import enmascarar, guardar_validado, origenes
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
 from panel.db.modelos import Llamada
+from panel.sync.tareas import ProcesarTranscripciones
 from panel.transcripcion import consultas, registro
 from panel.transcripcion.base import TranscripcionError, TranscripcionNoDisponible
 from panel.transcripcion.estrategias.openai import MODELO_POR_DEFECTO
@@ -22,6 +25,7 @@ from panel.transcripcion.hablantes import FRASES_AGENTE_POR_DEFECTO
 from panel.transcripcion.servicio import ServicioTranscripcion, VistaTranscripcion
 
 router = APIRouter(prefix="/api", tags=["transcripción"])
+bitacora = logging.getLogger(__name__)
 
 
 def _servicio(c: Contenedor) -> ServicioTranscripcion:
@@ -216,6 +220,8 @@ class Resumen(BaseModel):
     costo_reintento_usd: float | None
     # Los modelos activos, para reintentar un pedido con otro.
     modelos: list[OpcionModelo] = []
+    procesador: consultas.EstadoProcesador | None = None
+    procesando_en_panel: bool = False
 
 
 @router.get("/transcripcion/resumen", response_model=Resumen)
@@ -238,7 +244,49 @@ def resumen(c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)) -
         abiertos=consultas.trabajos_abiertos(s),
         costo_reintento_usd=float(costo) if costo is not None else None,
         modelos=_opciones(c.transcripcion, []) if c.transcripcion is not None else [],
+        procesador=consultas.estado_procesador(s, datetime.now(timezone.utc), cfg.sync_intervalo_minutos),
+        procesando_en_panel=_vaciando.locked(),
     )
+
+
+# Una sola vuelta de «Transcribir la cola ahora» a la vez por proceso.
+_vaciando = threading.Lock()
+
+
+def _vaciar_cola(tarea: ProcesarTranscripciones) -> None:
+    """Transcribe la cola de a tandas hasta que no quede ningún pedido por
+    tomar. Respeta el tope mensual. Cada vez que se toma un pedido suma un
+    intento y al tercero fallido queda en Errores, así que siempre termina."""
+    try:
+        while True:
+            resumen = tarea.correr()
+            if resumen.pausada_por_tope or not (resumen.hechos or resumen.reintentos or resumen.errores):
+                break
+    except Exception:
+        bitacora.exception("Falló «Transcribir la cola ahora»")
+    finally:
+        _vaciando.release()
+
+
+class Vaciado(BaseModel):
+    pendientes: int
+
+
+@router.post("/transcripcion/procesar", response_model=Vaciado, status_code=202)
+def procesar_cola(tareas: BackgroundTasks, c: Contenedor = Depends(contenedor), s: Session = Depends(sesion)) -> Vaciado:
+    """Transcribe la cola desde el panel, en segundo plano, sin esperar a la
+    sincronización. Puede correr a la vez que ella: no toman el mismo pedido."""
+    servicio = _servicio(c)
+    pendientes = consultas.estado_cola(s).get("pendiente", 0)
+    if not pendientes:
+        raise HTTPException(409, "No hay llamadas esperando transcripción.")
+    if not _vaciando.acquire(blocking=False):
+        raise HTTPException(409, "Ya se está transcribiendo la cola desde el panel.")
+    cfg = c.cfg
+    tareas.add_task(_vaciar_cola, ProcesarTranscripciones(
+        c.fabrica, servicio, cfg.transcripcion_por_ciclo, cfg.transcripcion_tope_mensual_usd,
+    ))
+    return Vaciado(pendientes=pendientes)
 
 
 class Reintento(BaseModel):

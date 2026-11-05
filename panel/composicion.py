@@ -4,6 +4,7 @@ Lee la configuración y decide qué clientes, fuentes y sincronizadores se usan.
 El resto del sistema recibe esas piezas ya armadas.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -35,6 +36,8 @@ from panel.transcripcion.base import (
 )
 from panel.transcripcion.hablantes import FRASES_AGENTE_POR_DEFECTO
 from panel.transcripcion.servicio import ServicioTranscripcion
+
+registro = logging.getLogger(__name__)
 
 
 def cliente_cloudtalk(cfg: Config) -> ClienteCloudTalk:
@@ -149,6 +152,14 @@ def sincronizadores(fabrica: sessionmaker[Session], cfg: Config) -> list[Sincron
         lista.append(SubirAudiosPendientes(fabrica, audio))
         lista.append(RetencionDeAudios(fabrica, audio))
     transcripcion = servicio_transcripcion(fabrica, cfg, audio)
+    if transcripcion is None and cfg.transcripcion_proveedor:
+        # Sin esto la cola se queda esperando sin ningún error a la vista.
+        registro.warning(
+            "La transcripción está elegida (%s) pero no se pudo armar: la cola no se procesa. "
+            "Falta %s.",
+            cfg.transcripcion_proveedor,
+            "CloudTalk para bajar el audio" if audio is None else "la clave del proveedor (o no se puede leer)",
+        )
     if transcripcion is not None:
         if cfg.transcripcion_auto_min_segundos:
             lista.append(

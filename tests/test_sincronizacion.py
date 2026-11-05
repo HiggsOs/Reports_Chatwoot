@@ -216,3 +216,37 @@ def test_cada_ciclo_lee_los_ajustes_del_panel(fabrica):
         sesion.commit()
     # Un ajuste inválido no frena la sincronización: sigue con el entorno.
     assert config_del_ciclo(base, fabrica, ENTORNO_VALIDO) is base
+
+
+def test_un_ciclo_que_falla_no_apaga_la_sincronizacion(monkeypatch):
+    import pytest
+
+    from panel.sync import __main__ as principal
+    from tests.test_config import ENTORNO_VALIDO
+
+    class Detener(BaseException):
+        pass
+
+    llamadas = []
+
+    def ciclo(*_args):
+        llamadas.append(1)
+        raise RuntimeError("se cayó la base")
+
+    def dormir(_segundos):
+        if len(llamadas) >= 2:
+            raise Detener
+
+    monkeypatch.setattr(principal.os, "environ", dict(ENTORNO_VALIDO))
+    monkeypatch.setattr(principal, "crear_motor", lambda url: None)
+    monkeypatch.setattr(principal, "crear_fabrica_sesiones", lambda motor: None)
+    monkeypatch.setattr(principal, "config_del_ciclo", lambda cfg, fabrica: cfg)
+    monkeypatch.setattr(principal, "sincronizadores", lambda fabrica, cfg: [])
+    monkeypatch.setattr(principal, "ejecutar_ciclo", ciclo)
+    monkeypatch.setattr(principal.time, "sleep", dormir)
+    with pytest.raises(Detener):
+        principal.main([])
+    assert len(llamadas) == 2
+    # Con --una-vez el error sí se ve: quien lo corre a mano lo tiene que saber.
+    with pytest.raises(RuntimeError):
+        principal.main(["--una-vez"])

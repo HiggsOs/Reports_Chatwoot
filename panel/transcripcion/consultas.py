@@ -6,7 +6,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
@@ -16,6 +16,7 @@ from panel.db.modelos import (
     TRABAJO_PENDIENTE,
     CobroTranscripcion,
     Llamada,
+    PuntoSincronizacion,
     TrabajoTranscripcion,
     TranscripcionGuardada,
 )
@@ -70,16 +71,88 @@ def estado_cola(sesion: Session) -> dict[str, int]:
     )
 
 
+# Nombre de la tarea de la sincronización que vacía la cola (ver panel.sync.tareas).
+TAREA_COLA = "transcripciones"
+# Con menos margen, un ciclo largo (muchas llamadas por transcribir) parecería detenido.
+MARGEN_MINIMO = timedelta(hours=1)
+
+
+class EstadoProcesador(BaseModel):
+    """Quién vacía la cola y cuándo lo hizo por última vez.
+
+    La cola la procesa el servicio de sincronización (`python -m panel.sync`),
+    no la API: si ese servicio no corre, o corre sin la transcripción armada,
+    los pedidos se quedan esperando sin ningún error. `diagnostico` lo explica
+    cuando hay pedidos esperando y la cola no avanza."""
+
+    ultima_vuelta: datetime | None  # el último ciclo que tomó pedidos de la cola
+    ultimo_exito: datetime | None
+    ultimo_error: str | None
+    resumen: dict | None
+    sincronizacion: datetime | None  # el último ciclo de la sincronización, de cualquier tarea
+    diagnostico: str | None = None
+
+
+def _hora(momento: datetime | None, zona: ZoneInfo) -> str:
+    return momento.astimezone(zona).strftime("%d/%m %H:%M") if momento else ""
+
+
+def estado_procesador(
+    sesion: Session, ahora: datetime, intervalo_minutos: int, zona: ZoneInfo = ZONA_OPERACION_POR_DEFECTO
+) -> EstadoProcesador:
+    puntos = {p.fuente: p for p in sesion.scalars(select(PuntoSincronizacion))}
+    cola = puntos.get(TAREA_COLA)
+    ultimos = [p.ultimo_intento for p in puntos.values() if p.ultimo_intento]
+    estado = EstadoProcesador(
+        ultima_vuelta=cola.ultimo_intento if cola else None,
+        ultimo_exito=cola.ultimo_exito if cola else None,
+        ultimo_error=cola.ultimo_error if cola else None,
+        resumen=cola.resumen if cola else None,
+        sincronizacion=max(ultimos) if ultimos else None,
+    )
+    esperando = sesion.scalar(
+        select(func.count()).where(TrabajoTranscripcion.estado == TRABAJO_PENDIENTE)
+    )
+    if not esperando:
+        return estado
+
+    limite = ahora - max(timedelta(minutes=3 * intervalo_minutos), MARGEN_MINIMO)
+    if estado.sincronizacion is None or estado.sincronizacion < limite:
+        desde = f"desde el {_hora(estado.sincronizacion, zona)}" if estado.sincronizacion else "nunca"
+        estado.diagnostico = (
+            f"La sincronización no corre ({desde}), y es ella la que transcribe la cola: los pedidos "
+            "se quedan esperando. Revise en EasyPanel que el servicio de sincronización "
+            "(python -m panel.sync) esté encendido y mire su log. Mientras tanto puede "
+            "transcribirlos desde aquí con «Transcribir la cola ahora»."
+        )
+    elif estado.ultima_vuelta is None or estado.ultima_vuelta < limite:
+        estado.diagnostico = (
+            "La sincronización corre, pero no transcribe: en ese servicio la transcripción no "
+            "quedó armada. Lo más común es que no tenga la misma PANEL_CLAVE_CIFRADO (o "
+            "APP_COOKIE_KEY) que el panel y no pueda leer la clave del proveedor; su log lo dice "
+            "(«Ajustes cifrados con otra llave» o «la transcripción no se pudo armar»). Mientras "
+            "tanto puede transcribirlos desde aquí con «Transcribir la cola ahora»."
+        )
+    elif estado.ultimo_error:
+        estado.diagnostico = f"La última vuelta de la cola falló ({_hora(estado.ultima_vuelta, zona)}): {estado.ultimo_error}"
+    return estado
+
+
 def trabajos_abiertos(
     sesion: Session, zona: ZoneInfo = ZONA_OPERACION_POR_DEFECTO, limite: int = 200
 ) -> list[TrabajoEnCola]:
-    """Los pedidos que esperan o se están transcribiendo, el más viejo primero.
-    `error` es el del último intento, si falló alguno."""
+    """Los pedidos que se están transcribiendo y después los que esperan, en
+    el orden en que la cola los va a tomar (el más viejo primero). `error` es
+    el del último intento, si falló alguno."""
     filas = sesion.execute(
         select(TrabajoTranscripcion, Llamada)
         .join(Llamada, TrabajoTranscripcion.llamada_id == Llamada.id)
         .where(TrabajoTranscripcion.estado.in_([TRABAJO_EN_PROCESO, TRABAJO_PENDIENTE]))
-        .order_by(TrabajoTranscripcion.creado_en)
+        .order_by(
+            case((TrabajoTranscripcion.estado == TRABAJO_EN_PROCESO, 0), else_=1),
+            TrabajoTranscripcion.creado_en,
+            TrabajoTranscripcion.id,
+        )
         .limit(limite)
     )
     return [

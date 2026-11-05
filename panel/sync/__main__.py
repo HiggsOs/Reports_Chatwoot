@@ -59,8 +59,16 @@ def main(argumentos: list[str] | None = None) -> int:
     while True:
         # En cada ciclo: los ajustes cargados en el panel valen sin reiniciar.
         cfg = config_del_ciclo(cfg, fabrica)
-        resultados = ejecutar_ciclo(fabrica, sincronizadores(fabrica, cfg), desde, hasta)
-        hubo_error = any(r.error for r in resultados or [])
+        try:
+            resultados = ejecutar_ciclo(fabrica, sincronizadores(fabrica, cfg), desde, hasta)
+            hubo_error = any(r.error for r in resultados or [])
+        except Exception:
+            # Un corte de la base o un error inesperado no apaga el servicio: si
+            # el proceso termina, nadie trae datos ni transcribe la cola.
+            if opciones.una_vez or desde is not None:
+                raise
+            registro.exception("Falló el ciclo de sincronización; se reintenta en el próximo.")
+            hubo_error = True
         if opciones.una_vez or desde is not None:
             return 1 if hubo_error else 0
         time.sleep(cfg.sync_intervalo_minutos * 60)

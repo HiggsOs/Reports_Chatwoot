@@ -26,7 +26,9 @@ export default function Transcripcion() {
     refetchInterval: (q) => ((q.state.data?.abiertos.length ?? 0) > 0 ? 5000 : false),
   });
   const errores = resumen.data?.cola.error ?? 0;
-  const [pestana, setPestana] = useState<IdPestana>(errores || (resumen.data?.abiertos.length ?? 0) ? "cola" : "configuracion");
+  // Los totales salen de la cola entera: la tabla muestra solo las primeras filas.
+  const abiertos = (resumen.data?.cola.pendiente ?? 0) + (resumen.data?.cola.en_proceso ?? 0);
+  const [pestana, setPestana] = useState<IdPestana>(errores || abiertos ? "cola" : "configuracion");
   const r = resumen.data;
   const tope = r?.tope_mensual_usd;
 
@@ -42,6 +44,7 @@ export default function Transcripcion() {
             <Metrica titulo="Gasto del mes (estimado)" valor={usd(r.gasto_mes_usd)}
               detalle={tope ? `${numero((r.gasto_mes_usd / tope) * 100, 0)} % del tope de ${usd(tope)}` : "Sin tope mensual"} />
           </div>
+          {r.procesador?.diagnostico && <Aviso tipo="error">{r.procesador.diagnostico}</Aviso>}
           {!r.configurada && <Aviso tipo="atencion">La transcripción no está configurada: elija el modelo principal y cargue la clave del proveedor en Configuración. También hace falta CloudTalk en <Link to="/general">General</Link>.</Aviso>}
           {tope && r.gasto_mes_usd >= tope && <Aviso tipo="error">Se alcanzó el tope mensual de {usd(tope)}: la cola está en pausa hasta el mes que viene o hasta subir el tope.</Aviso>}
           {tope && r.gasto_mes_usd < tope && r.gasto_mes_usd >= (tope * r.aviso_porcentaje) / 100 && <Aviso tipo="atencion">El gasto del mes ya pasó el {r.aviso_porcentaje} % del tope.</Aviso>}
@@ -49,7 +52,7 @@ export default function Transcripcion() {
       )}
       <Pestanas activa={pestana} alCambiar={setPestana} pestanas={[
         { id: "configuracion", titulo: "Configuración", icono: "tune" },
-        { id: "cola", titulo: "Cola", icono: "queue", contador: errores + (r?.abiertos.length ?? 0) },
+        { id: "cola", titulo: "Cola", icono: "queue", contador: errores + abiertos },
         { id: "gasto", titulo: "Gasto y precio real", icono: "payments" },
         { id: "comparar", titulo: "Comparar versiones", icono: "compare_arrows" },
       ]} />
@@ -95,6 +98,13 @@ function Cola({ resumen }: { resumen: ResumenTranscripcion }) {
     },
     onError: (e) => avisar((e as Error).message, "error"),
   });
+  const procesar = useMutation({
+    mutationFn: () => api.post<{ pendientes: number }>("/api/transcripcion/procesar"),
+    onSuccess: (r) => { avisar(`Se están transcribiendo ${entero(r.pendientes)} llamadas desde el panel. El avance se ve aquí.`); cliente.invalidateQueries(); },
+    onError: (e) => avisar((e as Error).message, "error"),
+  });
+  const p = resumen.procesador;
+  const esperando = resumen.cola.pendiente ?? 0;
   const accion = (e: TrabajoConError & { estado?: string }) => e.estado === "en_proceso" ? <span className="cap">—</span> : (
     <select className="entrada chica" aria-label={`Reintentar la llamada ${e.llamada}`} value="" disabled={!resumen.configurada || reintentarUno.isPending}
       onChange={(ev) => ev.target.value && reintentarUno.mutate({ id: e.id, eleccion: ev.target.value === "__mismo" ? MISMO_MODELO : ev.target.value })} style={{ minWidth: 190 }}>
@@ -110,9 +120,29 @@ function Cola({ resumen }: { resumen: ResumenTranscripcion }) {
         La sincronización transcribe hasta {resumen.por_ciclo} por ciclo, cada {resumen.intervalo_minutos} minutos. Si el modelo de un pedido falla, se prueban el principal y los de respaldo; si fallan todos, se reintenta tres veces y después queda en Errores. Hechas en total: {entero(resumen.cola.hecho ?? 0)}.
         {resumen.auto_min_segundos > 0 && ` Las llamadas grabadas nuevas de ${resumen.auto_min_segundos} s o más se agregan solas a la cola.`}
       </p>
+      <Tarjeta>
+        <div className="tarjeta-cab" style={{ flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <b>Quién transcribe la cola</b>
+            <p className="cap" style={{ margin: "4px 0 0" }}>
+              Última vuelta de la sincronización por la cola: {p?.ultima_vuelta ? formatoFechaHora(p.ultima_vuelta) : "nunca"}
+              {p?.resumen && typeof p.resumen.hechos === "number" && ` (${entero(p.resumen.hechos as number)} hechas)`}
+              {" · "}último ciclo de la sincronización: {p?.sincronizacion ? formatoFechaHora(p.sincronizacion) : "nunca"}
+              {resumen.procesando_en_panel && " · transcribiendo ahora desde el panel"}
+            </p>
+          </div>
+          <Boton variante={p?.diagnostico ? "primario" : undefined} icono="play_arrow" cargando={procesar.isPending || resumen.procesando_en_panel}
+            disabled={!resumen.configurada || esperando === 0} onClick={() => procesar.mutate()}>
+            Transcribir la cola ahora ({entero(esperando)})
+          </Boton>
+        </div>
+      </Tarjeta>
       {resumen.abiertos.length === 0 ? <Aviso tipo="info">No hay llamadas esperando transcripción.</Aviso> : (
         <Tarjeta>
-          <div className="tarjeta-cab"><b>En cola · {entero(resumen.abiertos.length)}</b></div>
+          <div className="tarjeta-cab">
+            <b>En cola · {entero(esperando + (resumen.cola.en_proceso ?? 0))}</b>
+            {resumen.abiertos.length < esperando + (resumen.cola.en_proceso ?? 0) && <span className="cap">Se muestran las primeras {entero(resumen.abiertos.length)}, en el orden en que se van a transcribir.</span>}
+          </div>
           <Tabla filas={resumen.abiertos} clave={(e) => e.id} alto="auto" columnas={[
             { titulo: "Llamada", celda: (e) => <span className="mono">{e.llamada}</span> },
             { titulo: "Fecha", celda: (e) => <span className="mono">{formatoFechaHora(e.inicio)}</span> },

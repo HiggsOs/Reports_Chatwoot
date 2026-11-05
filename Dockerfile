@@ -36,8 +36,11 @@ VOLUME ["/data"]
 
 EXPOSE 8501
 
+# El servicio de sincronización (python -m panel.sync) no sirve web: para él
+# basta con que su proceso siga vivo; si no, Docker lo daría por caído y lo
+# reiniciaría a mitad de un ciclo.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-    CMD python -c "import urllib.request as u; exec('try: u.urlopen(\'http://localhost:8501/api/salud\')\nexcept Exception: u.urlopen(\'http://localhost:8501/_stcore/health\')')"
+    CMD grep -qa panel.sync /proc/1/cmdline || python -c "import urllib.request as u; exec('try: u.urlopen(\'http://localhost:8501/api/salud\')\nexcept Exception: u.urlopen(\'http://localhost:8501/_stcore/health\')')"
 
 # Las migraciones se aplican en cada arranque: si no hay cambios pendientes no
 # hacen nada, y si fallan el contenedor no arranca con un esquema viejo.
