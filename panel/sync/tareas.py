@@ -114,7 +114,7 @@ class ProcesarTranscripciones(Tarea):
     alcanzó: la cola queda en pausa hasta el mes siguiente o hasta subir el tope.
     """
 
-    nombre = "transcripciones"
+    nombre = consultas_transcripcion.TAREA_COLA
 
     def __init__(
         self,

@@ -384,6 +384,14 @@ una. La página *Transcripción* muestra la cola, los errores (con un botón par
 reintentar), lo gastado en el mes y dos transcripciones de la misma llamada lado
 a lado.
 
+**La cola la transcribe el servicio de sincronización**, no la app: si ese
+servicio está apagado, o corre sin poder leer la clave del proveedor (por
+ejemplo, porque no tiene la misma `PANEL_CLAVE_CIFRADO` o `APP_COOKIE_KEY` que la
+app), los pedidos se quedan en cola sin ningún error. La página *Transcripción*
+lo avisa en rojo cuando hay pedidos esperando y la cola no avanzó en más de
+tres ciclos (o una hora), y *Transcribir la cola ahora* la procesa desde la app
+mientras tanto, respetando el tope mensual.
+
 **Quién habla.** Antes de transcribir se mira la grabación:
 
 - **Estéreo con una persona por canal**: cada canal se transcribe aparte, así

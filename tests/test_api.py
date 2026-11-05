@@ -558,3 +558,40 @@ def test_reintentar_con_otro_modelo(entorno, datos, tmp_path, monkeypatch):
             s.get(TrabajoTranscripcion, trabajo_id).estado = "hecho"
         assert cliente.post(f"/api/transcripcion/trabajos/{trabajo_id}/reintentar", json={},
                             headers=CABECERA).status_code == 409
+
+
+def test_transcribir_la_cola_desde_el_panel(entorno, datos, tmp_path, monkeypatch):
+    from api.contenedor import Contenedor as ClaseContenedor
+    from panel.db.modelos import Llamada
+    from panel.transcripcion.base import OpcionesTranscripcion
+    from panel.transcripcion.estrategias.falsa import EstrategiaFalsa
+    from panel.transcripcion.servicio import ResultadoTranscripcion, ServicioTranscripcion
+
+    servicio = ServicioTranscripcion(datos, None, {"falsa": EstrategiaFalsa()}, ["falsa"],
+                                     OpcionesTranscripcion(idioma="es"))
+    pedidos = []
+
+    def transcribir(llamada_id, proveedor=None):
+        pedidos.append(llamada_id)
+        return ResultadoTranscripcion(transcripcion_id=1, proveedor="falsa")
+
+    monkeypatch.setattr(servicio, "transcribir", transcribir)
+    monkeypatch.setattr(ClaseContenedor, "transcripcion", property(lambda _self: servicio))
+    with unidad_de_trabajo(datos) as s:
+        llamada_id = s.scalar(select(Llamada.id))
+    servicio.encolar([llamada_id])
+
+    with TestClient(crear_app(Contenedor(entorno), tmp_path / "sin-web")) as cliente:
+        cliente.post("/api/sesion", json={"usuario": "auditor", "contrasena": CLAVE}, headers=CABECERA)
+        # Sin la sincronización corriendo, nadie la transcribe: el panel lo dice.
+        procesador = cliente.get("/api/transcripcion/resumen").json()["procesador"]
+        assert "La sincronización no corre (nunca)" in procesador["diagnostico"]
+
+        r = cliente.post("/api/transcripcion/procesar", headers=CABECERA)
+        assert r.status_code == 202 and r.json() == {"pendientes": 1}
+        assert pedidos == [llamada_id]
+        resumen = cliente.get("/api/transcripcion/resumen").json()
+        assert resumen["cola"] == {"hecho": 1} and resumen["procesador"]["diagnostico"] is None
+        assert resumen["procesando_en_panel"] is False
+
+        assert cliente.post("/api/transcripcion/procesar", headers=CABECERA).status_code == 409

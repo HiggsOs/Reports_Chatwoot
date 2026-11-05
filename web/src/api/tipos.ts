@@ -71,6 +71,12 @@ export interface ResumenTranscripcion {
   configurada: boolean; cola: Record<string, number>; gasto_mes_usd: number; tope_mensual_usd: number | null;
   aviso_porcentaje: number; por_ciclo: number; intervalo_minutos: number; auto_min_segundos: number;
   errores: TrabajoConError[]; abiertos: TrabajoEnCola[]; costo_reintento_usd: number | null; modelos: OpcionModelo[];
+  procesador: EstadoProcesador | null; procesando_en_panel: boolean;
+}
+// Quién vacía la cola (el servicio de sincronización) y cuándo lo hizo por última vez.
+export interface EstadoProcesador {
+  ultima_vuelta: string | null; ultimo_exito: string | null; ultimo_error: string | null;
+  resumen: Record<string, unknown> | null; sincronizacion: string | null; diagnostico: string | null;
 }
 export interface FilaGasto {
   proveedor: string; modelo: string; titulo: string; minutos_panel: number; usd_estimado: number | null;
