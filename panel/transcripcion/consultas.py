@@ -6,7 +6,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from panel.asignacion.servicio import ZONA_OPERACION_POR_DEFECTO
@@ -141,13 +141,18 @@ def estado_procesador(
 def trabajos_abiertos(
     sesion: Session, zona: ZoneInfo = ZONA_OPERACION_POR_DEFECTO, limite: int = 200
 ) -> list[TrabajoEnCola]:
-    """Los pedidos que esperan o se están transcribiendo, el más viejo primero.
-    `error` es el del último intento, si falló alguno."""
+    """Los pedidos que se están transcribiendo y después los que esperan, en
+    el orden en que la cola los va a tomar (el más viejo primero). `error` es
+    el del último intento, si falló alguno."""
     filas = sesion.execute(
         select(TrabajoTranscripcion, Llamada)
         .join(Llamada, TrabajoTranscripcion.llamada_id == Llamada.id)
         .where(TrabajoTranscripcion.estado.in_([TRABAJO_EN_PROCESO, TRABAJO_PENDIENTE]))
-        .order_by(TrabajoTranscripcion.creado_en)
+        .order_by(
+            case((TrabajoTranscripcion.estado == TRABAJO_EN_PROCESO, 0), else_=1),
+            TrabajoTranscripcion.creado_en,
+            TrabajoTranscripcion.id,
+        )
         .limit(limite)
     )
     return [

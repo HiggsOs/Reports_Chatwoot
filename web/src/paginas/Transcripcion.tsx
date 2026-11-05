@@ -26,7 +26,9 @@ export default function Transcripcion() {
     refetchInterval: (q) => ((q.state.data?.abiertos.length ?? 0) > 0 ? 5000 : false),
   });
   const errores = resumen.data?.cola.error ?? 0;
-  const [pestana, setPestana] = useState<IdPestana>(errores || (resumen.data?.abiertos.length ?? 0) ? "cola" : "configuracion");
+  // Los totales salen de la cola entera: la tabla muestra solo las primeras filas.
+  const abiertos = (resumen.data?.cola.pendiente ?? 0) + (resumen.data?.cola.en_proceso ?? 0);
+  const [pestana, setPestana] = useState<IdPestana>(errores || abiertos ? "cola" : "configuracion");
   const r = resumen.data;
   const tope = r?.tope_mensual_usd;
 
@@ -50,7 +52,7 @@ export default function Transcripcion() {
       )}
       <Pestanas activa={pestana} alCambiar={setPestana} pestanas={[
         { id: "configuracion", titulo: "Configuración", icono: "tune" },
-        { id: "cola", titulo: "Cola", icono: "queue", contador: errores + (r?.abiertos.length ?? 0) },
+        { id: "cola", titulo: "Cola", icono: "queue", contador: errores + abiertos },
         { id: "gasto", titulo: "Gasto y precio real", icono: "payments" },
         { id: "comparar", titulo: "Comparar versiones", icono: "compare_arrows" },
       ]} />
@@ -137,7 +139,10 @@ function Cola({ resumen }: { resumen: ResumenTranscripcion }) {
       </Tarjeta>
       {resumen.abiertos.length === 0 ? <Aviso tipo="info">No hay llamadas esperando transcripción.</Aviso> : (
         <Tarjeta>
-          <div className="tarjeta-cab"><b>En cola · {entero(resumen.abiertos.length)}</b></div>
+          <div className="tarjeta-cab">
+            <b>En cola · {entero(esperando + (resumen.cola.en_proceso ?? 0))}</b>
+            {resumen.abiertos.length < esperando + (resumen.cola.en_proceso ?? 0) && <span className="cap">Se muestran las primeras {entero(resumen.abiertos.length)}, en el orden en que se van a transcribir.</span>}
+          </div>
           <Tabla filas={resumen.abiertos} clave={(e) => e.id} alto="auto" columnas={[
             { titulo: "Llamada", celda: (e) => <span className="mono">{e.llamada}</span> },
             { titulo: "Fecha", celda: (e) => <span className="mono">{formatoFechaHora(e.inicio)}</span> },

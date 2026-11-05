@@ -70,3 +70,15 @@ def test_la_ultima_vuelta_fallo(fabrica):
     _pedido(fabrica)
     _punto(fabrica, consultas.TAREA_COLA, timedelta(minutes=5), error="OperationalError: sin conexión")
     assert "OperationalError: sin conexión" in _estado(fabrica).diagnostico
+
+
+def test_la_tabla_muestra_primero_la_que_se_esta_transcribiendo(fabrica):
+    ids = [guardar_llamada(fabrica, id_externo=str(n)) for n in (1, 2, 3)]
+    with unidad_de_trabajo(fabrica) as sesion:
+        sesion.add_all(TrabajoTranscripcion(llamada_id=i) for i in ids)
+    with unidad_de_trabajo(fabrica) as sesion:
+        trabajo = sesion.query(TrabajoTranscripcion).filter_by(llamada_id=ids[2]).one()
+        trabajo.estado = "en_proceso"
+    with unidad_de_trabajo(fabrica) as sesion:
+        abiertos = consultas.trabajos_abiertos(sesion)
+    assert [(a.llamada, a.estado) for a in abiertos] == [("3", "en_proceso"), ("1", "pendiente"), ("2", "pendiente")]
