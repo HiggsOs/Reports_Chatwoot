@@ -82,3 +82,26 @@ def test_la_tabla_muestra_primero_la_que_se_esta_transcribiendo(fabrica):
     with unidad_de_trabajo(fabrica) as sesion:
         abiertos = consultas.trabajos_abiertos(sesion)
     assert [(a.llamada, a.estado) for a in abiertos] == [("3", "en_proceso"), ("1", "pendiente"), ("2", "pendiente")]
+
+
+def test_la_sincronizacion_sin_la_clave_deja_el_motivo_en_el_panel(fabrica):
+    from config import cargar_config
+    from panel.ajustes import Cifrador, RepositorioAjustes
+    from panel.composicion import sincronizadores
+    from panel.sync.tareas import TranscripcionSinArmar
+    from tests.test_config import ENTORNO_VALIDO
+
+    # La app guardó la clave del proveedor cifrada con su llave…
+    with unidad_de_trabajo(fabrica) as sesion:
+        RepositorioAjustes(sesion, Cifrador.desde_entorno(ENTORNO_VALIDO)).guardar({"DEEPGRAM_API_KEY": "dg"})
+    # …y la sincronización corre con otra.
+    entorno = {**ENTORNO_VALIDO, "APP_COOKIE_KEY": "otra-llave", "CLOUDTALK_API_KEY_ID": "a",
+               "CLOUDTALK_API_KEY_SECRET": "b", "TRANSCRIPCION_PROVEEDOR": "deepgram"}
+    tarea = next(t for t in sincronizadores(fabrica, cargar_config(entorno)) if isinstance(t, TranscripcionSinArmar))
+    assert tarea.ejecutar().error is not None
+
+    _pedido(fabrica)
+    with unidad_de_trabajo(fabrica) as sesion:
+        diagnostico = consultas.estado_procesador(sesion, tarea._ahora(), intervalo_minutos=15).diagnostico
+    assert "no se pudo armar" in diagnostico
+    assert "no puede leer DEEPGRAM_API_KEY" in diagnostico

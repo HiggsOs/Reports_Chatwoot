@@ -27,6 +27,7 @@ from panel.sync.tareas import (
     RetencionDeTranscripciones,
     SubirAudiosPendientes,
     Tarea,
+    TranscripcionSinArmar,
 )
 from panel.transcripcion import registro as registro_transcripcion
 from panel.transcripcion.base import (
@@ -154,12 +155,12 @@ def sincronizadores(fabrica: sessionmaker[Session], cfg: Config) -> list[Sincron
     transcripcion = servicio_transcripcion(fabrica, cfg, audio)
     if transcripcion is None and cfg.transcripcion_proveedor:
         # Sin esto la cola se queda esperando sin ningún error a la vista.
-        registro.warning(
-            "La transcripción está elegida (%s) pero no se pudo armar: la cola no se procesa. "
-            "Falta %s.",
-            cfg.transcripcion_proveedor,
-            "CloudTalk para bajar el audio" if audio is None else "la clave del proveedor (o no se puede leer)",
+        motivo = "La transcripción está elegida pero no se pudo armar: " + (
+            "falta CloudTalk para bajar el audio." if audio is None
+            else "ningún modelo tiene una clave del proveedor que este servicio pueda usar."
         )
+        registro.warning("%s La cola no se procesa.", motivo)
+        lista.append(TranscripcionSinArmar(fabrica, motivo, cfg.entorno))
     if transcripcion is not None:
         if cfg.transcripcion_auto_min_segundos:
             lista.append(

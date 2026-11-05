@@ -6,7 +6,7 @@ Como los sincronizadores, anotan su resultado en `puntos_sincronizacion`
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import ClassVar
@@ -139,6 +139,32 @@ class ProcesarTranscripciones(Tarea):
                 registro.info("Cola de transcripción en pausa: %s de %s USD.", gastado, self._tope)
                 return ResumenCola(pausada_por_tope=True)
         return self._transcripcion.procesar_cola(self._limite)
+
+
+class TranscripcionSinArmar(Tarea):
+    """Ocupa el lugar de la cola cuando la transcripción está elegida pero este
+    servicio no la pudo armar: deja el motivo como error de la cola, así el
+    panel lo muestra en lugar de que los pedidos esperen sin explicación."""
+
+    nombre = consultas_transcripcion.TAREA_COLA
+
+    def __init__(self, fabrica, motivo: str, entorno: Mapping[str, str], ahora=ahora_utc):
+        super().__init__(fabrica, ahora)
+        self._motivo = motivo
+        self._entorno = entorno
+
+    def correr(self):
+        from panel.ajustes import Cifrador, RepositorioAjustes
+
+        with unidad_de_trabajo(self._fabrica) as sesion:
+            ilegibles = RepositorioAjustes(sesion, Cifrador.desde_entorno(self._entorno)).leer().ilegibles
+        motivo = self._motivo
+        if ilegibles:
+            motivo += (
+                f" Este servicio no puede leer {', '.join(ilegibles)}: no tiene la misma "
+                "PANEL_CLAVE_CIFRADO (o APP_COOKIE_KEY) que la app."
+            )
+        raise RuntimeError(motivo)
 
 
 class ResumenEncolado(BaseModel):
