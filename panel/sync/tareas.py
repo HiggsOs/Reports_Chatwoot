@@ -62,6 +62,8 @@ class Tarea(ABC):
             punto.ultimo_exito = self._ahora()
             punto.ultimo_error = None
             punto.resumen = resumen
+        # Como los sincronizadores: así se ve en el log que la tarea corrió.
+        registro.info("Tarea %s: %s", self.nombre, resumen)
         return ResultadoSincronizacion(fuente=self.nombre, resumen=resumen)
 
     def toca_correr(self, ultimo_exito: datetime | None, ahora: datetime) -> bool:
