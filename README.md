@@ -167,7 +167,9 @@ python generar_hash.py 'la-contraseña-elegida'
    sh -c "alembic upgrade head && python -m panel.sync"
    ```
 
-   Corre un ciclo cada `SYNC_INTERVALO_MINUTOS`. Si los dos servicios arrancan a
+   El comando va en el campo **Comando** de la sección *Implementar* del
+   servicio (no en un Script, que corre una sola vez). Corre un ciclo cada
+   `SYNC_INTERVALO_MINUTOS`. Si los dos servicios arrancan a
    la vez, las migraciones esperan una a la otra.
 
 Al arrancar, el contenedor aplica las migraciones pendientes
