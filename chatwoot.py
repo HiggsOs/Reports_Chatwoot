@@ -13,7 +13,10 @@ ESPERA_BASE_SEGUNDOS = 1.0
 TIEMPO_LIMITE_SEGUNDOS = 30
 
 
-FORMATO_FECHA_FILTRO = "%Y-%m-%d %H:%M:%S"
+# Solo la fecha, en ISO 8601: Chatwoot valida el valor con `Date.iso8601` y
+# responde 422 si lleva hora ("2026-11-25 13:53:00" no pasa). Como de todas
+# formas compara por día, quitar la hora no cambia qué conversaciones trae.
+FORMATO_FECHA_FILTRO = "%Y-%m-%d"
 
 
 # Chatwoot compara created_at por día, no por hora. Se pide un día de más por
@@ -22,7 +25,7 @@ MARGEN_FILTRO = timedelta(days=1)
 
 
 def _a_texto_utc(momento: datetime) -> str:
-    """Convierte a UTC y formatea como texto, que es lo que acepta el filtro."""
+    """Convierte a UTC y deja solo el día, que es lo que acepta el filtro."""
     return momento.astimezone(timezone.utc).strftime(FORMATO_FECHA_FILTRO)
 
 
@@ -105,7 +108,8 @@ class ClienteChatwoot:
     def listar_conversaciones(self, desde: datetime, hasta: datetime) -> list[dict]:
         """Devuelve las conversaciones creadas dentro del rango, en cualquier estado.
 
-        Chatwoot rechaza un epoch numérico con error 500, y compara `created_at`
+        Chatwoot rechaza un epoch numérico con error 500 y una fecha con hora
+        con error 422 (solo acepta `AAAA-MM-DD`), y compara `created_at`
         a granularidad de día ignorando la hora, con operadores estrictos: pedir
         un solo día devuelve cero, porque ningún día está estrictamente entre el
         día pedido y el siguiente. Por eso se consulta un rango ampliado en un
