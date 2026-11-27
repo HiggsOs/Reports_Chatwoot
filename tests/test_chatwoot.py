@@ -1,6 +1,7 @@
 import json
 import json
-from datetime import datetime
+import re
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,9 +50,9 @@ def test_envia_el_token_y_el_rango_de_fechas():
     assert peticion.headers["api_access_token"] == "token-secreto"
     cuerpo = peticion.body.decode() if isinstance(peticion.body, bytes) else peticion.body
     # Se pide un día de margen por lado: DESDE es 2026-09-01 00:00 Bogotá
-    # (05:00 UTC), así que la consulta arranca el 2026-08-31 05:00 UTC.
-    assert "2026-08-31 05:00:00" in cuerpo
-    assert "2026-10-02 04:59:00" in cuerpo
+    # (05:00 UTC), así que la consulta arranca el día UTC 2026-08-31.
+    assert '"2026-08-31"' in cuerpo
+    assert '"2026-10-02"' in cuerpo
 
 
 @responses.activate
@@ -69,7 +70,9 @@ def test_las_fechas_del_filtro_van_como_texto_y_no_como_epoch():
         valor = clausula["values"][0]
         assert isinstance(valor, str), f"{valor!r} debe ser texto, no {type(valor)}"
         assert not valor.isdigit(), f"{valor!r} parece un epoch; Chatwoot lo rechaza"
-        datetime.strptime(valor, "%Y-%m-%d %H:%M:%S")
+        # Chatwoot valida con Date.iso8601: solo el día, sin hora, o responde 422.
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", valor), f"{valor!r} debe ser AAAA-MM-DD"
+        date.fromisoformat(valor)
 
 
 @responses.activate
