@@ -21,7 +21,7 @@ llega como número epoch, y compara esa fecha por día ignorando la hora, con
 operadores estrictos — así que pedir un solo día devolvía cero conversaciones
 en silencio.
 
-Más adelante Chatwoot empezó a validar la fecha con `Date.iso8601` y a
+En la versión 4.20.1, Chatwoot ya valida la fecha con `Date.iso8601` y a
 responder 422 ("Los valores proporcionados para created_at no son válidos")
 si llevaba hora. Desde entonces el filtro manda solo el día, `AAAA-MM-DD`.
 
